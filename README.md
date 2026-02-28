@@ -18,7 +18,7 @@ Row-level locking using FOR UPDATE SKIP LOCKED
 
 Retry with exponential backoff
 
-Escalation to dead-letter state
+Escalation to DEAD terminal state
 
 Idempotent job creation via database constraint
 
@@ -56,7 +56,7 @@ pending (retry with backoff)
 
 failed
 
-dead_letter
+dead
 
 All mutations occur within explicit transaction boundaries.
 
@@ -94,7 +94,7 @@ pyproject.toml
 Dockerfile
 docker-compose.yml
 
-Full specification lives in:
+Project specification documents live in:
 
 docs/SPEC_PACK.md
 
@@ -116,28 +116,32 @@ Implementation must not contradict these documents.
 
 Local Development
 
+Python 3.12 is required.
+
 From a clean clone:
 
-make up
-make migrate
-make run
-
-Testing:
-
-make test
-make test-cov
-
-Formatting / linting:
-
-make fmt
-make lint
-make typecheck
-
-Rollback migration:
-
-make rollback
+python3.12 --version   # must be 3.12.x
+make bootstrap
+make verify
 
 All commands must work from a clean environment.
+
+Local Concurrency Testing
+
+docker compose up -d
+export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/job_processor
+make verify
+
+Port 5432 collision
+
+If `localhost:5432` is already in use, another repo or local Postgres process may already be binding that port.
+
+Run:
+
+make doctor-db
+make down-v
+
+`make down-v` only tears down this repository's compose project (`job-processor-service`) and its volumes.
 
 Guarantees
 
@@ -150,6 +154,8 @@ Deterministic error envelope
 Explicit state transition enforcement
 
 Retry policy formally modeled
+
+Bounded retry governance with DEAD escalation
 
 Concurrency safety via database locking
 

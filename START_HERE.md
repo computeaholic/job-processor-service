@@ -1,4 +1,4 @@
-Project Spec Template
+Project Specification System
 
 This repository defines the canonical pre-implementation specification system used to design software projects before writing code.
 
@@ -32,7 +32,7 @@ Clear completion criteria
 
 Implementation is straightforward when ambiguity is removed.
 
-Ambiguity is the primary risk this template mitigates.
+Ambiguity is the primary risk this system mitigates.
 
 2. Purpose
 
@@ -60,7 +60,7 @@ A code scaffold
 
 A boilerplate generator
 
-A product template
+A product baseline
 
 A startup platform
 
@@ -72,7 +72,7 @@ It forces architecture to be defined before code exists.
 
 4. Canonical Derived Project Structure
 
-Every backend project derived from this template must contain:
+Every backend project derived from this specification system must contain:
 
 /docs
   SPEC_PACK.md
@@ -300,4 +300,4 @@ Defined tradeoffs over implied assumptions.
 
 Completion over scope growth.
 
-This template exists to prevent drift and enforce engineering discipline.
+This specification system exists to prevent drift and enforce engineering discipline.
