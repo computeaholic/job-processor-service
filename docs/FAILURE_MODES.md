@@ -1,91 +1,38 @@
-FAILURE MATRIX — job-processor-service
+FAILURE MODES — job-processor-service
 
-Scope Frozen: 2026-02-27
-Spec Version: 1.0
+Scope Frozen: 2026-09-20
+Spec Version: v1.1
 
-All failure scenarios are explicitly modeled below.
-No unmodeled failure is permitted.
+1. Public API Failures
 
-Failure Matrix
-Scenario	Detected At	User Response	HTTP Code	Log Level	Retry Strategy	Idempotent Behavior
-Invalid input (schema validation)	Validation layer	Error envelope (VALIDATION_ERROR)	422	WARNING	No retry	Safe to retry with corrected input
-Missing job (GET /jobs/{id})	Service layer	Error envelope (JOB_NOT_FOUND)	404	INFO	No retry	Safe to retry
-Duplicate job submission (client_request_id unique violation)	Infrastructure layer (DB constraint)	Error envelope (JOB_IDEMPOTENCY_CONFLICT)	409	INFO	No retry	Protected by DB unique constraint
-Illegal state transition (e.g., retry from non-dead_letter state)	Domain layer	Error envelope (JOB_ILLEGAL_TRANSITION)	409	WARNING	No retry	Safe to retry request; state unchanged
-Concurrency lock contention (worker claim)	Infrastructure layer	No API response (worker internal skip)	N/A	DEBUG	Skip locked row	Safe
-Database unavailable (startup or API)	Infrastructure layer	Error envelope (DB_UNAVAILABLE)	503	ERROR	Client may retry	Safe to retry
-Handler timeout	Worker layer	Treated as retryable failure	N/A	ERROR	Exponential backoff until attempts exhausted	Safe
-Retryable job failure	Worker layer	Transition to pending with backoff	N/A	WARNING	Exponential backoff	Safe
-Non-retryable job failure	Worker layer	Transition directly to dead_letter	N/A	WARNING	No retry	Safe
-Max attempts exceeded	Worker layer	Transition to dead_letter	N/A	WARNING	Escalation to dead_letter	Safe
-Worker crash mid-processing	Recovery scan	Job requeued after lease TTL	N/A	WARNING	Retry after lease expiry	Safe
-Partial transaction failure (API mutation)	Infrastructure layer	Error envelope (INTERNAL_ERROR)	500	ERROR	Client retry allowed	Safe
-Partial transaction failure (worker finalize)	Infrastructure layer	Transaction rollback; no state mutation	N/A	ERROR	Worker retry next poll	Safe
-Unexpected internal error	Service layer	Error envelope (INTERNAL_ERROR)	500	ERROR	Client retry allowed	Safe
-Definitions
-Detected At
+- invalid `POST /jobs` payload: `422`
+- missing job on `GET /jobs/{id}` or `POST /jobs/{id}/retry`: `404` with `JOB_NOT_FOUND`
+- conflicting replay for the same `client_request_id`: `409` with `JOB_IDEMPOTENCY_CONFLICT`
+- illegal retry from any non-`FAILED` state: `409` with `JOB_ILLEGAL_TRANSITION`
 
-Validation layer — Pydantic request parsing
+2. Worker Failures
 
-Domain layer — State legality enforcement
+- handler exception with remaining budget: `PROCESSING -> FAILED`, increment `retry_count`
+- handler exception at budget boundary: `PROCESSING -> DEAD`, increment `retry_count`
+- worker crash after claim: row remains `PROCESSING` until lease expiry, then reclaim requeues it
 
-Service layer — API orchestration
+3. Persistence Failures
 
-Worker layer — Background execution logic
+- DB unavailable: readiness returns `503`; runtime operations fail fast instead of faking success
+- stale update attempt: write is rejected with `VERSION_CONFLICT`
+- missing migration state: readiness returns `503`
 
-Infrastructure layer — Database connectivity, transactions, engine failures
+4. External Side-Effect Boundary
 
-Logging Rules
+If a handler performs an external side effect and the subsequent state write does not commit, the side effect may already have happened even though the job is not yet `SUCCEEDED`.
 
-Each failure logged exactly once at boundary mapping layer.
+That is the critical honesty boundary of this sample.
 
-Worker execution failures logged during finalize phase.
+Execution is at-least-once, not exactly-once.
 
-API envelope mapping logs at service boundary.
+5. Logging Rules
 
-No duplicate logs across layers.
-
-No payload bodies logged.
-
-No stack traces returned to client.
-
-Log entries must include job ID where applicable.
-
-Retry Semantics
-Failure Type	Retry Allowed?	Policy
-Validation error	No	Client must correct
-DB unavailable	Yes	Immediate client retry
-Retryable handler failure	Yes	Deterministic exponential backoff
-Handler timeout	Yes	Treated as retryable failure
-Non-retryable handler failure	No	Immediate dead_letter
-Lease expiration	Yes	Requeue without attempt increment
-Dead_letter	Manual only	API retry endpoint
-Backoff Policy
-
-Delay formula:
-
-delay = min(base_delay * (2^(attempt_count - 1)), max_delay)
-
-Defaults:
-
-base_delay = 5 seconds
-
-max_delay = 5 minutes
-
-No jitter (intentional for determinism).
-
-Enforcement Rules
-
-Every endpoint maps to at least one failure above.
-
-Every state transition must map to legality or illegal transition.
-
-Every worker failure must map to retry or escalation.
-
-All partial transaction paths must be atomic and rollback-safe.
-
-All failure paths must be covered by tests.
-
-Concurrency tests must validate lease recovery and single ownership.
-
-Failure handling is first-class system behavior.
+- lifecycle events are emitted as structured JSON strings through the stdlib logger
+- payloads and secrets are not logged
+- worker failure is logged once at the worker/service boundary
+- API responses do not expose stack traces
