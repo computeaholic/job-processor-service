@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Enum, Integer, String, Uuid
+from sqlalchemy import CheckConstraint, DateTime, Enum, Index, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from job_processor_service.infrastructure.db import Base
@@ -12,8 +12,24 @@ from job_processor_service.domain.state_machine import JobState
 
 class Job(Base):
     __tablename__ = "jobs"
+    __table_args__ = (
+        CheckConstraint("retry_count >= 0", name="ck_jobs_retry_count_non_negative"),
+        CheckConstraint("max_retries >= 1", name="ck_jobs_max_retries_positive"),
+        CheckConstraint(
+            "(state = 'PROCESSING' AND claimed_by IS NOT NULL AND lease_expires_at IS NOT NULL) "
+            "OR (state <> 'PROCESSING' AND claimed_by IS NULL AND lease_expires_at IS NULL)",
+            name="ck_jobs_processing_claim_consistency",
+        ),
+        Index("ix_jobs_pending_claim", "state", "claimed_by", "created_at"),
+        Index("ix_jobs_processing_lease", "state", "lease_expires_at"),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    client_request_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+        unique=True,
+    )
     state: Mapped[JobState] = mapped_column(
         Enum(JobState, native_enum=False),
         nullable=False,

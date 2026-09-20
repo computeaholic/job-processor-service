@@ -25,4 +25,7 @@ TRANSITIONS: dict[JobState, set[JobState]] = {
 def validate_transition(current: JobState, target: JobState) -> None:
     allowed_targets = TRANSITIONS[current]
     if target not in allowed_targets:
-        raise DomainError(f"Illegal transition: {current} -> {target}")
+        raise DomainError(
+            f"Illegal transition: {current} -> {target}",
+            code="JOB_ILLEGAL_TRANSITION",
+        )

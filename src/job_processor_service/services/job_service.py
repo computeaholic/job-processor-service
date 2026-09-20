@@ -1,30 +1,101 @@
 from __future__ import annotations
 
+import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from job_processor_service.domain.exceptions import DomainError
 from job_processor_service.domain.models import Job
 from job_processor_service.domain.state_machine import JobState, validate_transition
+from job_processor_service.infrastructure.logging_utils import log_event
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateJobResult:
+    job: Job
+    created: bool
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self.job, name)
 
 
 class JobService:
-    def create_job(self, session: Session) -> Job:
-        with session.begin():
-            job = Job(state=JobState.PENDING, version=0)
-            session.add(job)
-            session.flush()
-            session.refresh(job)
-            return job
+    def create_job(
+        self,
+        session: Session,
+        *,
+        client_request_id: UUID | None = None,
+        max_retries: int = 3,
+    ) -> CreateJobResult:
+        try:
+            with session.begin():
+                if client_request_id is not None:
+                    existing = self._get_by_client_request_id(session, client_request_id)
+                    if existing is not None:
+                        self._validate_create_replay(existing, max_retries)
+                        return CreateJobResult(job=existing, created=False)
+
+                job = Job(
+                    client_request_id=client_request_id,
+                    state=JobState.PENDING,
+                    version=0,
+                    max_retries=max_retries,
+                )
+                session.add(job)
+                session.flush()
+                session.refresh(job)
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "job.created",
+                    job_id=job.id,
+                    client_request_id=job.client_request_id,
+                    max_retries=job.max_retries,
+                )
+                return CreateJobResult(job=job, created=True)
+        except IntegrityError as error:
+            session.rollback()
+            if client_request_id is None:
+                raise error
+
+            existing = self._get_by_client_request_id(session, client_request_id)
+            if existing is None:
+                raise error
+
+            self._validate_create_replay(existing, max_retries)
+            log_event(
+                logger,
+                logging.INFO,
+                "job.create_replayed",
+                job_id=existing.id,
+                client_request_id=existing.client_request_id,
+            )
+            return CreateJobResult(job=existing, created=False)
+
+    def get_job(self, session: Session, job_id: UUID) -> Job:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise DomainError(f"Job not found: {job_id}", code="JOB_NOT_FOUND")
+        return job
+
+    def list_jobs(self, session: Session, state: JobState | None = None) -> list[Job]:
+        query = select(Job).order_by(Job.created_at.asc())
+        if state is not None:
+            query = query.where(Job.state == state)
+        return list(session.execute(query).scalars())
 
     def transition_job(self, session: Session, job_id: UUID, target_state: JobState) -> Job:
         with session.begin():
             job = session.get(Job, job_id)
             if job is None:
-                raise DomainError(f"Job not found: {job_id}")
+                raise DomainError(f"Job not found: {job_id}", code="JOB_NOT_FOUND")
 
             if job.state == target_state:
                 return job
@@ -37,6 +108,9 @@ class JobService:
             }
             if target_state is not JobState.FAILED:
                 values["error_message"] = None
+            if target_state is not JobState.PROCESSING:
+                values["claimed_by"] = None
+                values["lease_expires_at"] = None
 
             result = session.execute(
                 update(Job)
@@ -45,19 +119,27 @@ class JobService:
                 .values(**values)
             )
             if result.rowcount != 1:
-                raise DomainError("VERSION_CONFLICT")
+                raise DomainError("VERSION_CONFLICT", code="VERSION_CONFLICT")
 
             session.flush()
             updated = session.get(Job, job_id)
             if updated is None:
-                raise DomainError(f"Job not found: {job_id}")
+                raise DomainError(f"Job not found: {job_id}", code="JOB_NOT_FOUND")
+            log_event(
+                logger,
+                logging.INFO,
+                "job.transitioned",
+                job_id=updated.id,
+                state=updated.state.value,
+                version=updated.version,
+            )
             return updated
 
     def fail_job(self, session: Session, job_id: UUID, message: str) -> Job:
         with session.begin():
             job = session.get(Job, job_id)
             if job is None:
-                raise DomainError(f"Job not found: {job_id}")
+                raise DomainError(f"Job not found: {job_id}", code="JOB_NOT_FOUND")
 
             if job.state == JobState.FAILED:
                 return job
@@ -71,33 +153,35 @@ class JobService:
                 .values(
                     state=JobState.FAILED,
                     error_message=message,
+                    claimed_by=None,
+                    lease_expires_at=None,
                     version=current_version + 1,
                 )
             )
             if result.rowcount != 1:
-                raise DomainError("VERSION_CONFLICT")
+                raise DomainError("VERSION_CONFLICT", code="VERSION_CONFLICT")
 
             session.flush()
             updated = session.get(Job, job_id)
             if updated is None:
-                raise DomainError(f"Job not found: {job_id}")
+                raise DomainError(f"Job not found: {job_id}", code="JOB_NOT_FOUND")
+            log_event(
+                logger,
+                logging.WARNING,
+                "job.failed",
+                job_id=updated.id,
+                state=updated.state.value,
+                version=updated.version,
+            )
             return updated
 
     def retry_job(self, session: Session, job_id: UUID) -> Job:
         with session.begin():
             job = session.get(Job, job_id)
             if job is None:
-                raise DomainError(f"Job not found: {job_id}")
+                raise DomainError(f"Job not found: {job_id}", code="JOB_NOT_FOUND")
 
-            if job.state in {JobState.PENDING, JobState.DEAD}:
-                return job
-
-            target_state = (
-                JobState.DEAD
-                if job.retry_count >= job.max_retries
-                else JobState.PENDING
-            )
-            validate_transition(job.state, target_state)
+            validate_transition(job.state, JobState.PENDING)
 
             current_version = job.version
             result = session.execute(
@@ -105,23 +189,29 @@ class JobService:
                 .where(Job.id == job_id)
                 .where(Job.version == current_version)
                 .values(
-                    state=target_state,
+                    state=JobState.PENDING,
                     error_message=None,
-                    retry_count=(
-                        job.retry_count + 1
-                        if target_state == JobState.PENDING
-                        else job.retry_count
-                    ),
+                    claimed_by=None,
+                    lease_expires_at=None,
                     version=current_version + 1,
                 )
             )
             if result.rowcount != 1:
-                raise DomainError("VERSION_CONFLICT")
+                raise DomainError("VERSION_CONFLICT", code="VERSION_CONFLICT")
 
             session.flush()
             updated = session.get(Job, job_id)
             if updated is None:
-                raise DomainError(f"Job not found: {job_id}")
+                raise DomainError(f"Job not found: {job_id}", code="JOB_NOT_FOUND")
+            log_event(
+                logger,
+                logging.INFO,
+                "job.retried",
+                job_id=updated.id,
+                state=updated.state.value,
+                retry_count=updated.retry_count,
+                version=updated.version,
+            )
             return updated
 
     def record_processing_failure(
@@ -133,7 +223,7 @@ class JobService:
         with session.begin():
             job = session.get(Job, job_id)
             if job is None:
-                raise DomainError(f"Job not found: {job_id}")
+                raise DomainError(f"Job not found: {job_id}", code="JOB_NOT_FOUND")
 
             if job.state in {JobState.FAILED, JobState.DEAD}:
                 return job
@@ -155,16 +245,27 @@ class JobService:
                     state=target_state,
                     error_message=message,
                     retry_count=next_retry_count,
+                    claimed_by=None,
+                    lease_expires_at=None,
                     version=current_version + 1,
                 )
             )
             if result.rowcount != 1:
-                raise DomainError("VERSION_CONFLICT")
+                raise DomainError("VERSION_CONFLICT", code="VERSION_CONFLICT")
 
             session.flush()
             updated = session.get(Job, job_id)
             if updated is None:
-                raise DomainError(f"Job not found: {job_id}")
+                raise DomainError(f"Job not found: {job_id}", code="JOB_NOT_FOUND")
+            log_event(
+                logger,
+                logging.WARNING if updated.state is JobState.DEAD else logging.ERROR,
+                "job.processing_failed",
+                job_id=updated.id,
+                state=updated.state.value,
+                retry_count=updated.retry_count,
+                version=updated.version,
+            )
             return updated
 
     def claim_next_job(
@@ -224,12 +325,21 @@ class JobService:
                 )
             )
             if result.rowcount != 1:
-                raise DomainError("VERSION_CONFLICT")
+                raise DomainError("VERSION_CONFLICT", code="VERSION_CONFLICT")
 
             session.flush()
             updated = session.get(Job, job.id)
             if updated is None:
-                raise DomainError(f"Job not found: {job.id}")
+                raise DomainError(f"Job not found: {job.id}", code="JOB_NOT_FOUND")
+            log_event(
+                logger,
+                logging.INFO,
+                "job.claimed",
+                job_id=updated.id,
+                worker_id=worker_id,
+                lease_expires_at=updated.lease_expires_at,
+                version=updated.version,
+            )
             return updated
 
     def reclaim_expired_jobs(self, session: Session) -> int:
@@ -259,8 +369,31 @@ class JobService:
                     )
                 )
                 if result.rowcount != 1:
-                    raise DomainError("VERSION_CONFLICT")
+                    raise DomainError("VERSION_CONFLICT", code="VERSION_CONFLICT")
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "job.reclaimed",
+                    job_id=job.id,
+                    worker_id=job.claimed_by,
+                )
                 reclaimed += 1
 
             session.flush()
             return reclaimed
+
+    def _get_by_client_request_id(
+        self,
+        session: Session,
+        client_request_id: UUID,
+    ) -> Job | None:
+        return session.execute(
+            select(Job).where(Job.client_request_id == client_request_id)
+        ).scalar_one_or_none()
+
+    def _validate_create_replay(self, existing: Job, max_retries: int) -> None:
+        if existing.max_retries != max_retries:
+            raise DomainError(
+                "client_request_id already used for a different create request",
+                code="JOB_IDEMPOTENCY_CONFLICT",
+            )

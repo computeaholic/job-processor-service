@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import select
 
 DEFAULT_TEST_DATABASE_URL = (
-    "postgresql+psycopg://postgres:postgres@localhost:5432/job_processor"
+    "postgresql+psycopg://postgres:postgres@localhost:5433/job_processor"
 )
 
 

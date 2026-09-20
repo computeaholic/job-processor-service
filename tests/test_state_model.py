@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 DEFAULT_TEST_DATABASE_URL = (
-    "postgresql+psycopg://postgres:postgres@localhost:5432/job_processor"
+    "postgresql+psycopg://postgres:postgres@localhost:5433/job_processor"
 )
 
 
@@ -35,12 +35,13 @@ def test_valid_transitions(monkeypatch: pytest.MonkeyPatch) -> None:
         created = service.create_job(session)
 
     with SessionLocal() as session:
-        started = service.transition_job(session, created.id, JobState.PROCESSING)
+        started = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
 
     with SessionLocal() as session:
         succeeded = service.transition_job(session, created.id, JobState.SUCCEEDED)
 
     assert created.state is JobState.PENDING
+    assert started is not None
     assert started.state is JobState.PROCESSING
     assert succeeded.state is JobState.SUCCEEDED
     assert created.version == 0
@@ -61,12 +62,13 @@ def test_version_increments_on_transition(monkeypatch: pytest.MonkeyPatch) -> No
         created = service.create_job(session)
 
     with SessionLocal() as session:
-        processing = service.transition_job(session, created.id, JobState.PROCESSING)
+        processing = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
 
     with SessionLocal() as session:
         succeeded = service.transition_job(session, created.id, JobState.SUCCEEDED)
 
     assert created.version == 0
+    assert processing is not None
     assert processing.version == 1
     assert succeeded.version == 2
 
@@ -80,16 +82,11 @@ def test_illegal_transition_returns_409(monkeypatch: pytest.MonkeyPatch) -> None
     created = client.post("/jobs")
     job_id = created.json()["id"]
 
-    response = client.post(f"/jobs/{job_id}/succeed")
+    response = client.post(f"/jobs/{job_id}/retry")
 
-    assert created.status_code == 200
+    assert created.status_code == 201
     assert response.status_code == 409
-    assert response.json() == {
-        "error": {
-            "code": "ILLEGAL_STATE_TRANSITION",
-            "message": "Illegal transition: PENDING -> SUCCEEDED",
-        }
-    }
+    assert response.json()["error"]["code"] == "JOB_ILLEGAL_TRANSITION"
 
 
 def test_retry_from_failed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -105,7 +102,9 @@ def test_retry_from_failed(monkeypatch: pytest.MonkeyPatch) -> None:
         created = service.create_job(session)
 
     with SessionLocal() as session:
-        service.transition_job(session, created.id, JobState.PROCESSING)
+        claimed = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+
+    assert claimed is not None
 
     with SessionLocal() as session:
         failed = service.fail_job(session, created.id, "boom")
@@ -115,6 +114,8 @@ def test_retry_from_failed(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert failed.state is JobState.FAILED
     assert failed.error_message == "boom"
+    assert failed.claimed_by is None
+    assert failed.lease_expires_at is None
     assert retried.state is JobState.PENDING
     assert retried.error_message is None
     assert retried.version == failed.version + 1
@@ -134,7 +135,9 @@ def test_cannot_transition_from_succeeded(monkeypatch: pytest.MonkeyPatch) -> No
         created = service.create_job(session)
 
     with SessionLocal() as session:
-        service.transition_job(session, created.id, JobState.PROCESSING)
+        claimed = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+
+    assert claimed is not None
 
     with SessionLocal() as session:
         service.transition_job(session, created.id, JobState.SUCCEEDED)
@@ -236,6 +239,11 @@ def test_real_version_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
     with SessionLocal() as session:
         created = service.create_job(session)
 
+    with SessionLocal() as session:
+        claimed = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+
+    assert claimed is not None
+
     session_a = SessionLocal()
     session_b = SessionLocal()
     try:
@@ -248,10 +256,10 @@ def test_real_version_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
         session_a.commit()
         session_b.commit()
 
-        service.transition_job(session_b, created.id, JobState.PROCESSING)
+        service.transition_job(session_b, created.id, JobState.SUCCEEDED)
 
         with pytest.raises(DomainError, match="VERSION_CONFLICT"):
-            service.transition_job(session_a, created.id, JobState.PROCESSING)
+            service.transition_job(session_a, created.id, JobState.SUCCEEDED)
     finally:
         session_a.close()
         session_b.close()
@@ -343,7 +351,11 @@ def test_version_conflict_on_retry(monkeypatch: pytest.MonkeyPatch) -> None:
         job = service.create_job(session)
 
     with SessionLocal() as session:
-        service.transition_job(session, job.id, JobState.PROCESSING)
+        claimed = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+
+    assert claimed is not None
+
+    with SessionLocal() as session:
         service.transition_job(session, job.id, JobState.FAILED)
 
     session_a = SessionLocal()
@@ -427,16 +439,19 @@ def test_retry_until_dead(monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_database(monkeypatch)
 
     from job_processor_service.domain.state_machine import JobState
+    from job_processor_service.domain.exceptions import DomainError
     from job_processor_service.infrastructure.db import SessionLocal
     from job_processor_service.services.job_service import JobService
 
     service = JobService()
 
     with SessionLocal() as session:
-        created = service.create_job(session)
+        created = service.create_job(session, max_retries=2)
 
     with SessionLocal() as session:
-        processing = service.transition_job(session, created.id, JobState.PROCESSING)
+        processing = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+
+    assert processing is not None
 
     with SessionLocal() as session:
         failed_1 = service.record_processing_failure(session, processing.id, "fail-1")
@@ -445,22 +460,23 @@ def test_retry_until_dead(monkeypatch: pytest.MonkeyPatch) -> None:
         pending_1 = service.retry_job(session, created.id)
 
     with SessionLocal() as session:
-        processing_2 = service.transition_job(session, created.id, JobState.PROCESSING)
+        processing_2 = service.claim_next_job(session, worker_id="worker-b", lease_seconds=30)
+
+    assert processing_2 is not None
 
     with SessionLocal() as session:
         dead = service.record_processing_failure(session, processing_2.id, "fail-2")
 
     with SessionLocal() as session:
-        dead_retry = service.retry_job(session, created.id)
+        with pytest.raises(DomainError, match="Illegal transition: DEAD -> PENDING"):
+            service.retry_job(session, created.id)
 
     assert failed_1.state is JobState.FAILED
     assert failed_1.retry_count == 1
     assert pending_1.state is JobState.PENDING
-    assert pending_1.retry_count == 2
+    assert pending_1.retry_count == 1
     assert dead.state is JobState.DEAD
-    assert dead.retry_count == 3
-    assert dead_retry.state is JobState.DEAD
-    assert dead_retry.retry_count == 3
+    assert dead.retry_count == 2
 
 
 def test_dead_is_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -485,7 +501,9 @@ def test_dead_is_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
             session.add(created_model)
 
     with SessionLocal() as session:
-        processing = service.transition_job(session, created.id, JobState.PROCESSING)
+        processing = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+
+    assert processing is not None
 
     with SessionLocal() as session:
         dead = service.record_processing_failure(session, processing.id, "terminal")
@@ -500,7 +518,6 @@ def test_dead_is_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_retry_count_increments_correctly(monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_database(monkeypatch)
 
-    from job_processor_service.domain.state_machine import JobState
     from job_processor_service.infrastructure.db import SessionLocal
     from job_processor_service.services.job_service import JobService
 
@@ -510,7 +527,9 @@ def test_retry_count_increments_correctly(monkeypatch: pytest.MonkeyPatch) -> No
         created = service.create_job(session)
 
     with SessionLocal() as session:
-        processing = service.transition_job(session, created.id, JobState.PROCESSING)
+        processing = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+
+    assert processing is not None
 
     with SessionLocal() as session:
         failed = service.record_processing_failure(session, processing.id, "boom")
@@ -519,13 +538,13 @@ def test_retry_count_increments_correctly(monkeypatch: pytest.MonkeyPatch) -> No
         pending = service.retry_job(session, created.id)
 
     assert failed.retry_count == 1
-    assert pending.retry_count == 2
+    assert pending.retry_count == 1
 
 
-def test_retry_idempotent_no_double_increment(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_retry_from_pending_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_database(monkeypatch)
 
-    from job_processor_service.domain.state_machine import JobState
+    from job_processor_service.domain.exceptions import DomainError
     from job_processor_service.infrastructure.db import SessionLocal
     from job_processor_service.services.job_service import JobService
 
@@ -535,7 +554,9 @@ def test_retry_idempotent_no_double_increment(monkeypatch: pytest.MonkeyPatch) -
         created = service.create_job(session)
 
     with SessionLocal() as session:
-        processing = service.transition_job(session, created.id, JobState.PROCESSING)
+        processing = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+
+    assert processing is not None
 
     with SessionLocal() as session:
         failed = service.record_processing_failure(session, processing.id, "boom")
@@ -544,8 +565,8 @@ def test_retry_idempotent_no_double_increment(monkeypatch: pytest.MonkeyPatch) -
         first_retry = service.retry_job(session, created.id)
 
     with SessionLocal() as session:
-        second_retry = service.retry_job(session, created.id)
+        with pytest.raises(DomainError, match="Illegal transition: PENDING -> PENDING"):
+            service.retry_job(session, created.id)
 
     assert failed.retry_count == 1
-    assert first_retry.retry_count == 2
-    assert second_retry.retry_count == first_retry.retry_count
+    assert first_retry.retry_count == 1

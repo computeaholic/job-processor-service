@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from threading import Event
 from time import sleep
 from typing import Callable, Protocol
@@ -7,7 +8,10 @@ from typing import Callable, Protocol
 from job_processor_service.domain.models import Job
 from job_processor_service.domain.state_machine import JobState
 from job_processor_service.infrastructure.db import SessionLocal
+from job_processor_service.infrastructure.logging_utils import log_event
 from job_processor_service.services.job_service import JobService
+
+logger = logging.getLogger(__name__)
 
 
 class WorkCallbackProtocol(Protocol):
@@ -48,10 +52,26 @@ class Worker:
             try:
                 self.work_callback(job)
             except Exception as exc:
-                self.service.record_processing_failure(session, job.id, str(exc))
+                failed = self.service.record_processing_failure(session, job.id, str(exc))
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "worker.job_failed",
+                    worker_id=self.worker_id,
+                    job_id=job.id,
+                    state=failed.state.value,
+                )
                 return True
 
-            self.service.transition_job(session, job.id, JobState.SUCCEEDED)
+            completed = self.service.transition_job(session, job.id, JobState.SUCCEEDED)
+            log_event(
+                logger,
+                logging.INFO,
+                "worker.job_succeeded",
+                worker_id=self.worker_id,
+                job_id=job.id,
+                state=completed.state.value,
+            )
             return True
 
     def run_forever(self, stop_event: Event) -> None:
