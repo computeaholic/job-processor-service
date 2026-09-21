@@ -1,17 +1,17 @@
 CONCURRENCY MODEL — job-processor-service
 
-Scope Frozen: 2026-02-27
-Spec Version: 1.0
+Scope Frozen: 2026-09-20
+Spec Version: 1.1
 
 This document defines how concurrent workers interact safely with the database and guarantees single ownership of a job during execution.
 
-Concurrency correctness is enforced via database row-level locking.
+Concurrency correctness is enforced via database row-level locking plus version-guarded writes.
 
 No distributed coordination mechanisms are used.
 
 1. Concurrency Strategy
 
-The system relies exclusively on:
+The system relies on:
 
 PostgreSQL row-level locking
 
@@ -21,8 +21,8 @@ Explicit transaction boundaries
 
 Lease-based recovery
 
-No optimistic locking.
-No version columns.
+Optimistic concurrency via version column
+
 No distributed locks.
 No external brokers.
 
@@ -32,19 +32,22 @@ Workers poll eligible jobs:
 
 Criteria:
 
-status = 'pending'
+state = 'PENDING'
 
 next_run_at <= now
+
+claimed_by IS NULL
 
 Acquisition query:
 
 SELECT *
 FROM jobs
-WHERE status = 'pending'
+WHERE state = 'PENDING'
 AND next_run_at <= now()
-ORDER BY next_run_at, created_at
+AND claimed_by IS NULL
+ORDER BY next_run_at, created_at, id
 FOR UPDATE SKIP LOCKED
-LIMIT :batch_size;
+LIMIT 1;
 
 Behavior:
 
@@ -58,47 +61,43 @@ Claim transition occurs inside:
 
 with session.begin():
 
-State mutation to running occurs before commit.
+State mutation to PROCESSING occurs before commit.
 
 3. Ownership Guarantees
 
 A job is considered owned when:
 
-status = 'running'
+state = 'PROCESSING'
 
-locked_by is set
+claimed_by is set
 
-locked_at is set
+lease_expires_at is set
 
-Only the worker that set locked_by may finalize the job.
+Stale finalize, retry, or reclaim attempts must also satisfy the current version value.
 
-Before finalization, worker must revalidate:
-
-Job still running
-
-locked_by == worker_id
-
-If ownership lost, worker aborts without mutation.
+If the row version has changed, the write fails with VERSION_CONFLICT.
 
 4. Worker Crash Handling
 
 If worker crashes after claim but before finalize:
 
-Job remains in running
+Job remains in PROCESSING
 
 Lease TTL governs recovery
 
 Lease expiration condition:
 
-locked_at < now - lease_ttl
+lease_expires_at < now
 
 Recovery behavior:
 
-Job requeued to pending
+Job requeued to PENDING
 
 Lock fields cleared
 
-No attempt_count increment
+next_run_at = now
+
+No retry_count increment
 
 Logged once
 
@@ -112,9 +111,9 @@ READ COMMITTED (PostgreSQL default)
 
 Justification:
 
-Row locks guarantee single-writer semantics.
+Row locks guarantee single-claim semantics.
 
-No phantom issues impact correctness.
+Version guards reject stale writers.
 
 Higher isolation unnecessary for scope.
 
@@ -122,9 +121,9 @@ Higher isolation unnecessary for scope.
 
 System guarantees:
 
-No two workers execute same job concurrently.
+No two workers claim the same eligible PENDING job concurrently.
 
-Duplicate execution may occur only after lease expiration.
+Duplicate execution may occur only after lease expiration or after external effect / commit mismatch.
 
 Handlers must be idempotent.
 
@@ -134,8 +133,6 @@ Side effects must tolerate re-run.
 
 No external side effect tracking provided in v1.
 
-Determinism enforced at handler level.
-
 7. Contention Behavior
 
 Under high worker concurrency:
@@ -144,7 +141,7 @@ Workers may skip locked rows.
 
 No API-level errors generated.
 
-Lock contention is internal and logged at DEBUG.
+Lock contention is internal and logged at DEBUG/INFO boundaries as needed.
 
 Throughput degrades gracefully.
 
@@ -161,7 +158,7 @@ Unique constraint on client_request_id
 
 DB-level enforcement
 
-409 returned on violation
+409 returned on immutable create-contract mismatch
 
 No race condition possible due to constraint.
 
@@ -175,6 +172,8 @@ All claims use FOR UPDATE SKIP LOCKED.
 
 Lease recovery follows defined TTL.
 
+All stale writes respect version guards.
+
 Violation of these rules breaks correctness and is not permitted.
 
 10. Enforcement Requirements
@@ -183,11 +182,11 @@ Concurrency test must simulate ≥2 workers.
 
 Tests must verify:
 
-No double execution
+No double claim
 
 Proper lease recovery
 
-Correct dead-letter escalation
+Correct DEAD escalation
 
 No test may mock row-level locking.
 

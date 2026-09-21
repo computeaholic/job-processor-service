@@ -15,9 +15,14 @@ class JobState(StrEnum):
 
 TRANSITIONS: dict[JobState, set[JobState]] = {
     JobState.PENDING: {JobState.PROCESSING},
-    JobState.PROCESSING: {JobState.SUCCEEDED, JobState.FAILED, JobState.DEAD},
+    JobState.PROCESSING: {
+        JobState.SUCCEEDED,
+        JobState.PENDING,
+        JobState.FAILED,
+        JobState.DEAD,
+    },
     JobState.SUCCEEDED: set(),
-    JobState.FAILED: {JobState.PENDING, JobState.DEAD},
+    JobState.FAILED: {JobState.PENDING},
     JobState.DEAD: set(),
 }
 
@@ -25,4 +30,7 @@ TRANSITIONS: dict[JobState, set[JobState]] = {
 def validate_transition(current: JobState, target: JobState) -> None:
     allowed_targets = TRANSITIONS[current]
     if target not in allowed_targets:
-        raise DomainError(f"Illegal transition: {current} -> {target}")
+        raise DomainError(
+            f"Illegal transition: {current} -> {target}",
+            code="JOB_ILLEGAL_TRANSITION",
+        )

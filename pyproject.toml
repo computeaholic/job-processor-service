@@ -7,10 +7,12 @@ name = "job-processor-service"
 version = "0.1.0"
 requires-python = "==3.12.*"
 dependencies = [
+  "alembic==1.15.2",
   "fastapi==0.115.10",
   "sqlalchemy==2.0.38",
   "pydantic-settings==2.8.1",
   "psycopg[binary]==3.2.6",
+  "uvicorn==0.34.0",
 ]
 
 [project.optional-dependencies]

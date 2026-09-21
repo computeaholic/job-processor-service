@@ -1,7 +1,7 @@
 OPERATIONS — job-processor-service
 
-Scope Frozen: 2026-02-27
-Spec Version: v1.0
+Scope Frozen: 2026-09-20
+Spec Version: v1.1
 
 This document defines runtime behavior, startup sequence, environment configuration, and recovery procedures.
 
@@ -13,12 +13,9 @@ Required:
 
 Variable	Required	Description	Default
 DATABASE_URL	Yes	PostgreSQL connection string	None
-WORKER_ID	Yes	Unique identifier for worker instance	None
-POLL_INTERVAL_SECONDS	No	Worker poll interval	1
-LEASE_TTL_SECONDS	No	Lease expiration window	300
-WORKER_BATCH_SIZE	No	Max jobs claimed per poll	10
-BASE_BACKOFF_SECONDS	No	Initial retry delay	5
-MAX_BACKOFF_SECONDS	No	Maximum retry delay	300
+WORKER_ID	No	Worker identity override	Hostname-derived
+POLL_INTERVAL_SECONDS	No	Worker poll interval	0.5
+LEASE_TTL_SECONDS	No	Lease expiration window	30
 
 No environment variable may change system invariants.
 
@@ -29,7 +26,7 @@ Load environment variables.
 
 Establish DB engine.
 
-Verify DB connectivity.
+Verify DB connectivity through readiness path.
 
 Verify migration level matches latest.
 
@@ -51,9 +48,13 @@ Verify DB connectivity.
 
 Start polling loop.
 
-Start lease recovery maintenance loop.
+Run claim / execute / finalize lifecycle.
 
-Worker does not start if DB unreachable.
+Worker does not require the API process to be running.
+
+Runnable command:
+
+make worker
 
 3. Worker Runtime Behavior
 3.1 Poll Loop
@@ -62,35 +63,37 @@ At each interval:
 
 Begin transaction.
 
-Claim up to WORKER_BATCH_SIZE jobs.
+Claim one eligible job.
 
-Transition to running.
+Transition to PROCESSING.
 
 Commit.
 
 Execution phase:
 
-Process jobs outside claim transaction.
+Process job outside claim transaction.
 
-Finalize each job in separate transaction.
+Finalize in separate transaction.
 
 No nested transactions permitted.
 
 3.2 Lease Recovery Loop
 
-Runs periodically (every POLL_INTERVAL_SECONDS):
+Lease recovery is invoked through the worker-internal reclaim operation.
 
-Identify stale running jobs.
+Identify stale PROCESSING jobs.
 
-Transition stale jobs to pending.
+Transition stale jobs to PENDING.
 
 Clear lock fields.
+
+Set next_run_at = now.
 
 Log once per recovered job.
 
 Lease expiration condition:
 
-locked_at < now - LEASE_TTL_SECONDS
+lease_expires_at < now
 
 4. Deployment Model
 
@@ -122,11 +125,9 @@ Startup fails readiness check if migration level is behind.
 
 Worker must:
 
-Stop polling.
+Stop claiming new work after shutdown requested.
 
 Allow in-flight job execution to complete.
-
-Finalize jobs before exit.
 
 Release process cleanly.
 
@@ -140,11 +141,11 @@ Structured JSON only.
 
 State transitions logged at INFO.
 
-Retry escalation logged at WARNING.
+Retry scheduling logged at INFO/WARNING.
 
-Dead-letter transitions logged at WARNING.
+Dead transitions logged at WARNING.
 
-Unexpected errors logged at ERROR.
+Unexpected errors logged at ERROR/WARNING as appropriate.
 
 No payload bodies logged.
 
@@ -155,7 +156,7 @@ No stack traces exposed via API.
 
 API readiness fails.
 
-Worker exits or loops with backoff.
+Worker exits or loops only under explicit caller control.
 
 No state corruption occurs.
 
@@ -169,7 +170,7 @@ Restart service.
 
 Effect:
 
-Running jobs remain locked.
+Running jobs remain claimed.
 
 Recovery:
 
@@ -181,17 +182,17 @@ No manual intervention required.
 
 Condition:
 
-attempt_count >= max_attempts
+retry_count >= max_retries on retryable processing failure
 
 Effect:
 
-Transition to dead_letter.
+Transition to DEAD.
 
 No automatic retry.
 
 Recovery:
 
-Manual retry endpoint.
+No manual retry in this version.
 
 9. Operational Assumptions
 
@@ -205,18 +206,20 @@ Environment variables correctly configured.
 
 Violation of these assumptions invalidates guarantees.
 
-10. Operational Boundaries
+10. Local Commands
 
-This system does not provide:
+make up
 
-Horizontal scaling across databases
+make wait-db
 
-Automatic shard balancing
+make migrate
 
-Job prioritization
+make rollback
 
-Observability stack
+make worker
 
-SLA enforcement
+11. Container Runtime
 
-Operational guarantees apply only within defined scope.
+The root Dockerfile runs the API by default with a pinned Python 3.12 base image and non-root runtime user.
+
+The worker can be launched by overriding the container command to run `python -m job_processor_service.worker_main`.

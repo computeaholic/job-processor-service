@@ -16,11 +16,13 @@ Deterministic failure modeling
 
 Row-level locking using FOR UPDATE SKIP LOCKED
 
-Retry with exponential backoff
+Retry with deterministic exponential backoff
 
 Escalation to DEAD terminal state
 
-Idempotent job creation via database constraint
+Idempotent job creation via database constraint and immutable create contract
+
+Version-guarded state updates
 
 Explicit transaction boundaries
 
@@ -40,23 +42,23 @@ Job
 
 Worker model:
 
-Polls eligible jobs (status = pending AND next_run_at <= now)
+Polls eligible jobs (status = PENDING AND next_run_at <= now)
 
 Claims via row-level lock
 
-Transitions to running
+Transitions to PROCESSING
 
-Executes handler
+Executes handler selected by job_type using payload
 
 Transitions to:
 
-completed
+SUCCEEDED
 
-pending (retry with backoff)
+PENDING (retryable failure with backoff)
 
-failed
+FAILED (non-retryable failure)
 
-dead
+DEAD
 
 All mutations occur within explicit transaction boundaries.
 
@@ -126,6 +128,16 @@ make verify
 
 All commands must work from a clean environment.
 
+Run the API locally:
+
+export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/job_processor
+.venv/bin/uvicorn job_processor_service.main:app --app-dir src
+
+Run the worker locally:
+
+export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/job_processor
+make worker
+
 Local Concurrency Testing
 
 docker compose up -d
@@ -161,12 +173,26 @@ Concurrency safety via database locking
 
 Worker crash recovery via lease expiry
 
+At-least-once execution with explicit idempotent-handler requirement
+
 No TODO placeholders in finished implementation
+
+Demo
+
+Create a job:
+
+```bash
+curl -s http://127.0.0.1:8000/jobs \
+	-H 'content-type: application/json' \
+	-d '{"client_request_id":"11111111-1111-1111-1111-111111111111","job_type":"sample.noop","payload":{"value":"ok"},"max_retries":2}'
+```
+
+Fetch it:
+
+```bash
+curl -s http://127.0.0.1:8000/jobs/<job-id>
+```
 
 Status
 
-Specification-first project.
-
-Implementation begins only after freeze.
-
-See docs/FREEZE.md for binding freeze declaration.
+Engineering sample focused on durable job lifecycle and worker coordination.

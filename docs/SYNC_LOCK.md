@@ -1,7 +1,7 @@
 SYNC LOCK — job-processor-service
 
-Scope Frozen: 2026-02-27
-Spec Version: v1.0
+Scope Frozen: 2026-09-20
+Spec Version: v1.1
 
 This document captures the authoritative mission and boundaries of this repository.
 
@@ -53,13 +53,13 @@ Row-level concurrency control (FOR UPDATE SKIP LOCKED)
 
 Lease-based worker recovery
 
-Idempotent job creation via DB constraint
+Idempotent job creation via DB constraint and immutable create contract
 
 Clean architectural layering (api → services → domain)
 
 Mechanical CI enforcement
 
-Operational clarity (startup, recovery, migration)
+Operational clarity (startup, recovery, migration, worker entrypoint)
 
 These demonstrations define success.
 
@@ -161,7 +161,7 @@ No /src implementation may contradict:
 
 STATE_MODEL.md
 
-FAILURE_MATRIX.md
+FAILURE_MODES.md
 
 CONCURRENCY_MODEL.md
 

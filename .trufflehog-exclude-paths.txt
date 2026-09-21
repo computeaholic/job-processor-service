@@ -1,4 +1,5 @@
 ^\.venv/.*
 ^\.mypy_cache/.*
 ^\.pytest_cache/.*
+^\.git/.*
 ^src/job_processor_service\.egg-info/.*

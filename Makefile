@@ -1,9 +1,13 @@
-.PHONY: bootstrap check-python fmt lint typecheck test test-cov security up down down-v ps logs-db doctor-db wait-db verify
+.PHONY: bootstrap check-python fmt format-check lint typecheck test test-cov security up down down-v ps logs-db doctor-db wait-db migrate rollback verify worker
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
 COMPOSE := docker compose -p job-processor-service
 DB_CONTAINER := job-processor-postgres
+DB_PORT ?= 5432
+
+export DATABASE_URL ?= postgresql+psycopg://postgres:postgres@localhost:$(DB_PORT)/job_processor
+export JOB_PROCESSOR_DB_PORT := $(DB_PORT)
 
 bootstrap:
 	python3.12 -m venv $(VENV)
@@ -16,11 +20,23 @@ check-python:
 fmt:
 	$(PYTHON) -m black .
 
+format-check:
+	$(PYTHON) -m black --check .
+
 lint:
 	$(PYTHON) -m ruff check .
 
 typecheck:
 	$(PYTHON) -m mypy src
+
+migrate:
+	$(PYTHON) -m alembic upgrade head
+
+rollback:
+	$(PYTHON) -m alembic downgrade -1
+
+worker:
+	DATABASE_URL="$(DATABASE_URL)" $(PYTHON) -m job_processor_service.worker_main
 
 test:
 	$(PYTHON) -m pytest -q
@@ -57,9 +73,9 @@ doctor-db:
 
 wait-db:
 	@command -v docker >/dev/null || { echo "docker not found on PATH"; exit 1; }
-	@command -v pg_isready >/dev/null || { echo "pg_isready not found on PATH"; exit 1; }
 	@container="$(DB_CONTAINER)"; \
 	compose_cmd="$(COMPOSE)"; \
+	db_port="$(DB_PORT)"; \
 	diag() { \
 		echo "== compose ps =="; \
 		$$compose_cmd ps; \
@@ -77,11 +93,11 @@ wait-db:
 	while [ $$i -le $$max ]; do \
 		health=$$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$$container" 2>/dev/null || echo "missing"); \
 		if [ "$$health" = "healthy" ]; then \
-			if pg_isready -h localhost -p 5432 -U postgres -d job_processor >/dev/null 2>&1; then \
-				echo "Container '$$container' is healthy and accepting connections on localhost:5432"; \
+			if docker exec "$$container" pg_isready -U postgres -d job_processor >/dev/null 2>&1; then \
+				echo "Container '$$container' is healthy and accepting connections on localhost:$$db_port"; \
 				exit 0; \
 			fi; \
-			echo "Container '$$container' is healthy but not yet accepting connections on localhost:5432 ($$i/$$max)"; \
+			echo "Container '$$container' is healthy but not yet accepting connections on localhost:$$db_port ($$i/$$max)"; \
 		elif [ "$$health" = "unhealthy" ]; then \
 			echo "Container '$$container' is unhealthy"; \
 			diag; \
@@ -99,7 +115,9 @@ wait-db:
 verify:
 	$(MAKE) up
 	$(MAKE) wait-db
+	$(MAKE) migrate
 	$(MAKE) check-python
+	$(MAKE) format-check
 	$(MAKE) lint
 	$(MAKE) typecheck
 	$(MAKE) test

@@ -1,7 +1,7 @@
 STATE MODEL — job-processor-service
 
-Scope Frozen: 2026-02-27
-Spec Version: 1.0
+Scope Frozen: 2026-09-20
+Spec Version: 1.1
 
 This document defines the authoritative lifecycle for the Job entity.
 
@@ -12,26 +12,26 @@ All transitions must be explicitly modeled and tested.
 
 Valid States:
 
-pending
+PENDING
 
-running
+PROCESSING
 
-failed
+FAILED
 
-completed (terminal)
+SUCCEEDED (terminal)
 
-dead_letter (terminal)
+DEAD (terminal)
 
 Terminal States:
 
-completed
+SUCCEEDED
 
-dead_letter
+DEAD
 
-Terminal states may not transition except via explicitly defined manual retry rule.
+Terminal states may not transition except via explicitly defined rules.
 
 2. State Definitions
-pending
+PENDING
 
 Job is eligible for execution when:
 
@@ -39,60 +39,57 @@ next_run_at <= now
 
 No worker currently owns the job.
 
-locked_by must be NULL.
+claimed_by must be NULL.
 
-locked_at must be NULL.
+lease_expires_at must be NULL.
 
-running
+PROCESSING
 
 Job is actively being processed by a worker.
 
-locked_by must be set.
+claimed_by must be set.
 
-locked_at must be set.
+lease_expires_at must be set.
 
 Worker must hold row-level lock at claim time.
 
-failed
+FAILED
 
-Job execution failed.
+Job execution failed in a non-retryable or operator-intervention path.
 
-Failure may be retryable.
+retry_count has already been incremented.
 
-attempt_count incremented.
+May transition back to PENDING only through manual retry.
 
-May transition back to pending if retryable and attempts remain.
-
-completed (terminal)
+SUCCEEDED (terminal)
 
 Job successfully executed.
 
 No further transitions allowed.
 
-dead_letter (terminal)
+DEAD (terminal)
 
-Job exceeded max attempts or escalated.
+Job exceeded max retries through retryable processing failure.
 
-Requires manual retry to re-enter lifecycle.
+No manual retry is allowed in this version.
 
 3. Legal Transitions
 From	To	Condition	Enforced In
-pending	running	Worker acquires job via FOR UPDATE SKIP LOCKED	Worker
-running	completed	Handler returns success	Worker
-running	failed	Handler raises NonRetryableJobError	Worker
-running	failed	Handler raises RetryableJobError (intermediate state)	Worker
-failed	pending	attempt_count < max_attempts AND error retryable	Worker
-failed	dead_letter	attempt_count >= max_attempts	Worker
-dead_letter	pending	Manual retry endpoint invoked	API + Domain
+PENDING	PROCESSING	Worker acquires job via FOR UPDATE SKIP LOCKED	Worker
+PROCESSING	SUCCEEDED	Handler returns success	Worker
+PROCESSING	PENDING	Retryable failure and retry_count < max_retries	Worker
+PROCESSING	FAILED	Handler raises NonRetryableJobError	Worker
+PROCESSING	DEAD	Retryable failure and retry_count >= max_retries	Worker
+FAILED	PENDING	Manual retry endpoint invoked	API + Domain
 4. Illegal Transitions
 
 The following transitions are explicitly illegal:
 
 Attempted	Behavior	Error Code
-completed → any state	Reject	JOB_ILLEGAL_TRANSITION
-pending → completed (external)	Reject	JOB_ILLEGAL_TRANSITION
-running → pending (external)	Reject	JOB_ILLEGAL_TRANSITION
-dead_letter → running	Reject	JOB_ILLEGAL_TRANSITION
+SUCCEEDED → any state	Reject	JOB_ILLEGAL_TRANSITION
+PENDING → SUCCEEDED (external)	Reject	JOB_ILLEGAL_TRANSITION
+PENDING → PENDING (retry)	Reject	JOB_ILLEGAL_TRANSITION
+DEAD → PENDING	Reject	JOB_ILLEGAL_TRANSITION
 any undefined transition	Reject	JOB_ILLEGAL_TRANSITION
 
 Illegal transitions:
@@ -107,44 +104,43 @@ All illegal transitions must be tested.
 
 5. Attempt Counting Semantics
 
-attempt_count starts at 0.
+retry_count starts at 0.
 
-Increment occurs after handler failure.
+Increment occurs after processing failure.
 
-Retry allowed when:
+Automatic retry allowed when:
 
-attempt_count < max_attempts
+retry_count < max_retries
 
 When:
 
-attempt_count >= max_attempts
+retry_count >= max_retries
 
-Transition to dead_letter.
+Transition to DEAD.
+
+Manual retry preserves retry_count.
 
 No off-by-one ambiguity permitted.
 
 6. Lease & Recovery Rules
 
-Lease TTL: configurable (default 300 seconds)
+Lease TTL: configurable (default 30 seconds in local entrypoint settings)
 
-A job in running is considered stale when:
+A job in PROCESSING is considered stale when:
 
-locked_at < now - lease_ttl
+lease_expires_at < now
 
 Recovery behavior:
 
-Stale job transitions to pending
+Stale job transitions to PENDING
 
-locked_by cleared
+claimed_by cleared
 
-locked_at cleared
+lease_expires_at cleared
 
 next_run_at = now
 
-attempt_count unchanged
-
-Logged as:
-JOB_LEASE_EXPIRED
+retry_count unchanged
 
 Recovery is worker responsibility.
 
@@ -152,9 +148,9 @@ Recovery is worker responsibility.
 
 A job may only exist in one state.
 
-A job may only be in running when owned by exactly one worker.
+A job may only be in PROCESSING when owned by exactly one worker.
 
-A job in completed or dead_letter must never be auto-retried.
+A job in SUCCEEDED or DEAD must never be auto-retried.
 
 State transitions must occur inside explicit transaction boundaries.
 

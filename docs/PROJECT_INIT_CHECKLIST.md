@@ -1,7 +1,7 @@
 PROJECT INITIALIZATION CHECKLIST — job-processor-service
 
-Scope Frozen: 2026-02-27
-Spec Version: v1.0
+Scope Frozen: 2026-09-20
+Spec Version: v1.1
 
 No /src directory may exist until all required items are complete.
 
@@ -43,7 +43,7 @@ No /src directory may exist until all required items are complete.
 
  Error envelope contract confirmed
 
-Pending before implementation:
+ Pending before implementation:
 
  Makefile targets declared
 
@@ -57,7 +57,7 @@ Pending before implementation:
 
  Concurrency testing plan defined
 
- Coverage target declared (80–85%)
+ Coverage target declared (90%)
 
  Test cases derived from failure matrix
 
