@@ -357,7 +357,7 @@ Upgrade + downgrade tested
 
 Coverage:
 
-80–85%
+90%
 
 All illegal transitions explicitly tested.
 

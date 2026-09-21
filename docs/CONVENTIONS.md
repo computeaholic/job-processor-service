@@ -1,7 +1,7 @@
 CONVENTIONS — job-processor-service
 
-Scope Frozen: 2026-02-27
-Spec Version: v1.0
+Scope Frozen: 2026-09-20
+Spec Version: v1.1
 
 These conventions are binding for this repository.
 
@@ -12,19 +12,19 @@ They enforce predictability, reduce review overhead, and prevent structural drif
 Backend repository structure must be:
 
 /
-  START_HERE.md
   README.md
-  SPEC_PACK.md
-  CONSTRAINTS.md
-  FAILURE_MATRIX.md
-  STATE_MODEL.md
-  CONCURRENCY_MODEL.md
-  TRADEOFFS.md
-  INTERVIEW_DEFENSE.md
-  OPERATIONS.md
-  BACKEND_STACK_PROFILE.md
-  CONVENTIONS.md
-  FREEZE.md
+  /docs
+    SPEC_PACK.md
+    CONSTRAINTS.md
+    FAILURE_MODES.md
+    STATE_MODEL.md
+    CONCURRENCY_MODEL.md
+    TRADEOFFS.md
+    INTERVIEW_DEFENSE.md
+    OPERATIONS.md
+    BACKEND_STACK_PROFILE.md
+    CONVENTIONS.md
+    FREEZE.md
   /src
     api/
     domain/
@@ -120,7 +120,7 @@ No raw exceptions returned.
 
 No stack traces exposed.
 
-Error codes must match FAILURE_MATRIX.md.
+Error codes must match FAILURE_MODES.md.
 
 Error mapping occurs only at API boundary layer.
 
@@ -150,7 +150,7 @@ Unique DB constraints preferred for dedupe.
 
 IntegrityError mapped deterministically to 409.
 
-Behavior documented in FAILURE_MATRIX.md.
+Behavior documented in FAILURE_MODES.md.
 
 7. Logging Discipline
 
@@ -174,7 +174,7 @@ pytest required.
 
 Tests derive from:
 
-FAILURE_MATRIX.md
+FAILURE_MODES.md
 
 STATE_MODEL.md
 
@@ -186,7 +186,7 @@ Concurrency tests mandatory.
 
 Lease recovery must be tested.
 
-Coverage target: 80–85%.
+Coverage target: 90%.
 
 Rules:
 
