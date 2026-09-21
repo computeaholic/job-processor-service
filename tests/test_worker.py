@@ -17,7 +17,6 @@ DEFAULT_TEST_DATABASE_URL = (
 def prepare_database(monkeypatch: pytest.MonkeyPatch) -> None:
     database_url = os.getenv("DATABASE_URL", DEFAULT_TEST_DATABASE_URL)
     monkeypatch.setenv("DATABASE_URL", database_url)
-    from job_processor_service.domain import models  # pyright: ignore[reportUnusedImport] # noqa: F401
     from job_processor_service.infrastructure.db import Base, engine
 
     Base.metadata.drop_all(engine)
@@ -87,7 +86,9 @@ def test_worker_retryable_failure_requeues(monkeypatch: pytest.MonkeyPatch) -> N
     assert before_failure < updated.next_run_at <= after_failure + timedelta(seconds=5)
 
 
-def test_worker_non_retryable_failure_marks_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_worker_non_retryable_failure_marks_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     prepare_database(monkeypatch)
     from job_processor_service.domain.exceptions import NonRetryableJobError
     from job_processor_service.domain.models import Job
@@ -169,7 +170,9 @@ def test_worker_parallel_execution(monkeypatch: pytest.MonkeyPatch) -> None:
             with error_lock:
                 worker_errors.append(exc)
 
-    threads = [threading.Thread(target=run_worker, args=(idx,)) for idx in range(total_jobs)]
+    threads = [
+        threading.Thread(target=run_worker, args=(idx,)) for idx in range(total_jobs)
+    ]
     for thread in threads:
         thread.start()
     for thread in threads:
@@ -226,7 +229,9 @@ def test_worker_escalates_to_dead(monkeypatch: pytest.MonkeyPatch) -> None:
     assert updated.retry_count == 1
 
 
-def test_run_forever_respects_pre_set_stop_event(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_forever_respects_pre_set_stop_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     prepare_database(monkeypatch)
     from job_processor_service.domain.models import Job
     from job_processor_service.domain.state_machine import JobState
@@ -250,7 +255,9 @@ def test_run_forever_respects_pre_set_stop_event(monkeypatch: pytest.MonkeyPatch
     assert updated.state == JobState.PENDING
 
 
-def test_run_forever_finishes_inflight_before_stopping(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_forever_finishes_inflight_before_stopping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     prepare_database(monkeypatch)
     from job_processor_service.domain.models import Job
     from job_processor_service.domain.state_machine import JobState

@@ -1,4 +1,4 @@
-.PHONY: bootstrap check-python fmt lint typecheck test test-cov security up down down-v ps logs-db doctor-db wait-db migrate rollback verify worker
+.PHONY: bootstrap check-python fmt format-check lint typecheck test test-cov security up down down-v ps logs-db doctor-db wait-db migrate rollback verify worker
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
@@ -19,6 +19,9 @@ check-python:
 
 fmt:
 	$(PYTHON) -m black .
+
+format-check:
+	$(PYTHON) -m black --check .
 
 lint:
 	$(PYTHON) -m ruff check .
@@ -114,6 +117,7 @@ verify:
 	$(MAKE) wait-db
 	$(MAKE) migrate
 	$(MAKE) check-python
+	$(MAKE) format-check
 	$(MAKE) lint
 	$(MAKE) typecheck
 	$(MAKE) test

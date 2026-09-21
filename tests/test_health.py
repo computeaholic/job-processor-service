@@ -28,6 +28,7 @@ def prepare_migrated_database(database_url: str) -> None:
     reset_database(database_url)
     command.upgrade(migration_config(database_url), "head")
 
+
 def test_health_live_returns_alive(monkeypatch: object) -> None:
     database_url = os.getenv("DATABASE_URL", DEFAULT_TEST_DATABASE_URL)
     monkeypatch.setenv("DATABASE_URL", database_url)
@@ -53,7 +54,9 @@ def test_health_ready_returns_ready(monkeypatch: object) -> None:
     assert response.json() == {"status": "ready"}
 
 
-def test_health_ready_returns_not_ready_when_migrations_missing(monkeypatch: object) -> None:
+def test_health_ready_returns_not_ready_when_migrations_missing(
+    monkeypatch: object,
+) -> None:
     database_url = os.getenv("DATABASE_URL", DEFAULT_TEST_DATABASE_URL)
     monkeypatch.setenv("DATABASE_URL", database_url)
     reset_database(database_url)

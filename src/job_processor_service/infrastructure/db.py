@@ -43,7 +43,9 @@ def expected_migration_revision() -> str:
 
 def current_migration_revision() -> str | None:
     with engine.connect() as connection:
-        return connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one_or_none()
+        return connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one_or_none()
 
 
 def readiness_status() -> tuple[bool, str]:

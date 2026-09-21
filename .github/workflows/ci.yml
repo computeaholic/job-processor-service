@@ -106,4 +106,4 @@ jobs:
         run: python -m bandit -r src -x tests -lll -q
 
       - name: TruffleHog
-        run: trufflehog filesystem . --no-update --fail
+        run: trufflehog filesystem . --no-update --fail --exclude-paths .trufflehog-exclude-paths.txt

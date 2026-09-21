@@ -16,4 +16,6 @@ def health_ready() -> JSONResponse:
     ready, reason = readiness_status()
     if ready:
         return JSONResponse(status_code=200, content={"status": "ready"})
-    return JSONResponse(status_code=503, content={"status": "not_ready", "reason": reason})
+    return JSONResponse(
+        status_code=503, content={"status": "not_ready", "reason": reason}
+    )

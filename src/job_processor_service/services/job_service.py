@@ -63,7 +63,9 @@ class JobService:
         try:
             with session.begin():
                 if client_request_id is not None:
-                    existing = self._get_by_client_request_id(session, client_request_id)
+                    existing = self._get_by_client_request_id(
+                        session, client_request_id
+                    )
                     if existing is not None:
                         self._validate_create_replay(
                             existing,
@@ -143,7 +145,9 @@ class JobService:
         query = query.limit(limit).offset(offset)
         return list(session.execute(query).scalars())
 
-    def transition_job(self, session: Session, job_id: UUID, target_state: JobState) -> Job:
+    def transition_job(
+        self, session: Session, job_id: UUID, target_state: JobState
+    ) -> Job:
         with session.begin():
             job = session.get(Job, job_id)
             if job is None:

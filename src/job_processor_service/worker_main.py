@@ -9,7 +9,10 @@ from typing import Any, Callable
 from job_processor_service.config.settings import Settings
 from job_processor_service.domain.exceptions import NonRetryableJobError
 from job_processor_service.domain.models import Job
-from job_processor_service.infrastructure.logging_utils import configure_logging, log_event
+from job_processor_service.infrastructure.logging_utils import (
+    configure_logging,
+    log_event,
+)
 from job_processor_service.services.worker import Worker
 
 logger = logging.getLogger(__name__)

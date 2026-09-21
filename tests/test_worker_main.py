@@ -105,4 +105,8 @@ def test_main_configures_worker_and_shutdown(monkeypatch: pytest.MonkeyPatch) ->
         "stop_event_before": False,
         "stop_event_after": True,
     }
-    assert logged_events == ["worker.started", "worker.shutdown_requested", "worker.stopped"]
+    assert logged_events == [
+        "worker.started",
+        "worker.shutdown_requested",
+        "worker.stopped",
+    ]

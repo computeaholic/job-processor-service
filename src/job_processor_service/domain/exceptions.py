@@ -5,6 +5,8 @@ class DomainError(Exception):
 
 
 class NonRetryableJobError(Exception):
-    def __init__(self, message: str, *, code: str = "JOB_NON_RETRYABLE_FAILURE") -> None:
+    def __init__(
+        self, message: str, *, code: str = "JOB_NON_RETRYABLE_FAILURE"
+    ) -> None:
         super().__init__(message)
         self.code = code

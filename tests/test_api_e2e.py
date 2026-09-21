@@ -58,7 +58,9 @@ def create_failed_job(*, next_run_at: datetime | None = None) -> str:
         )
 
     with SessionLocal() as session:
-        claimed = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+        claimed = service.claim_next_job(
+            session, worker_id="worker-a", lease_seconds=30
+        )
 
     assert claimed is not None
     assert claimed.id == created.id
@@ -90,7 +92,9 @@ def create_dead_job() -> str:
         )
 
     with SessionLocal() as session:
-        claimed = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+        claimed = service.claim_next_job(
+            session, worker_id="worker-a", lease_seconds=30
+        )
 
     assert claimed is not None
     assert claimed.id == created.id
@@ -143,7 +147,9 @@ def test_create_job_with_idempotency_key_replays_e2e(
     assert replayed.json()["id"] == created.json()["id"]
 
 
-def test_same_key_different_job_type_conflicts_e2e(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_same_key_different_job_type_conflicts_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     prepare_database(monkeypatch)
 
     client = get_client()
@@ -163,7 +169,9 @@ def test_same_key_different_job_type_conflicts_e2e(monkeypatch: pytest.MonkeyPat
     assert conflicted.json()["error"]["code"] == "JOB_IDEMPOTENCY_CONFLICT"
 
 
-def test_same_key_different_payload_conflicts_e2e(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_same_key_different_payload_conflicts_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     prepare_database(monkeypatch)
 
     client = get_client()
@@ -183,7 +191,9 @@ def test_same_key_different_payload_conflicts_e2e(monkeypatch: pytest.MonkeyPatc
     assert conflicted.json()["error"]["code"] == "JOB_IDEMPOTENCY_CONFLICT"
 
 
-def test_same_key_different_max_retries_conflicts_e2e(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_same_key_different_max_retries_conflicts_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     prepare_database(monkeypatch)
 
     client = get_client()
@@ -255,7 +265,9 @@ def test_list_jobs_default_limit_e2e(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(listed.json()) == 50
 
 
-def test_list_jobs_explicit_limit_and_offset_e2e(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_list_jobs_explicit_limit_and_offset_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     prepare_database(monkeypatch)
 
     client = get_client()
@@ -348,7 +360,9 @@ def test_dead_job_exposes_sanitized_failure_metadata_e2e(
     assert listed.json()[0]["id"] == job_id
 
 
-def test_retry_from_pending_returns_conflict_e2e(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_retry_from_pending_returns_conflict_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     prepare_database(monkeypatch)
 
     client = get_client()

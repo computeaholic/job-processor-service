@@ -38,7 +38,9 @@ def test_valid_transitions(monkeypatch: pytest.MonkeyPatch) -> None:
         created = service.create_job(session)
 
     with SessionLocal() as session:
-        started = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+        started = service.claim_next_job(
+            session, worker_id="worker-a", lease_seconds=30
+        )
 
     with SessionLocal() as session:
         succeeded = service.transition_job(session, created.id, JobState.SUCCEEDED)
@@ -62,7 +64,9 @@ def test_version_increments_on_transition(monkeypatch: pytest.MonkeyPatch) -> No
         created = service.create_job(session)
 
     with SessionLocal() as session:
-        processing = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+        processing = service.claim_next_job(
+            session, worker_id="worker-a", lease_seconds=30
+        )
 
     with SessionLocal() as session:
         succeeded = service.transition_job(session, created.id, JobState.SUCCEEDED)
@@ -111,10 +115,14 @@ def test_claim_returns_single_job(monkeypatch: pytest.MonkeyPatch) -> None:
         newest = service.create_job(session)
 
     with SessionLocal() as session:
-        first_claim = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+        first_claim = service.claim_next_job(
+            session, worker_id="worker-a", lease_seconds=30
+        )
 
     with SessionLocal() as session:
-        second_claim = service.claim_next_job(session, worker_id="worker-b", lease_seconds=30)
+        second_claim = service.claim_next_job(
+            session, worker_id="worker-b", lease_seconds=30
+        )
 
     assert first_claim is not None
     assert second_claim is not None
@@ -122,7 +130,9 @@ def test_claim_returns_single_job(monkeypatch: pytest.MonkeyPatch) -> None:
     assert second_claim.id == newest.id
 
 
-def test_future_next_run_at_job_is_not_claimable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_future_next_run_at_job_is_not_claimable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     prepare_database(monkeypatch)
 
     from job_processor_service.infrastructure.db import SessionLocal
@@ -131,10 +141,14 @@ def test_future_next_run_at_job_is_not_claimable(monkeypatch: pytest.MonkeyPatch
     service = JobService()
 
     with SessionLocal() as session:
-        service.create_job(session, next_run_at=datetime.now(UTC) + timedelta(minutes=5))
+        service.create_job(
+            session, next_run_at=datetime.now(UTC) + timedelta(minutes=5)
+        )
 
     with SessionLocal() as session:
-        claimed = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+        claimed = service.claim_next_job(
+            session, worker_id="worker-a", lease_seconds=30
+        )
 
     assert claimed is None
 
@@ -148,10 +162,14 @@ def test_eligible_next_run_at_job_is_claimable(monkeypatch: pytest.MonkeyPatch) 
     service = JobService()
 
     with SessionLocal() as session:
-        created = service.create_job(session, next_run_at=datetime.now(UTC) - timedelta(seconds=1))
+        created = service.create_job(
+            session, next_run_at=datetime.now(UTC) - timedelta(seconds=1)
+        )
 
     with SessionLocal() as session:
-        claimed = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+        claimed = service.claim_next_job(
+            session, worker_id="worker-a", lease_seconds=30
+        )
 
     assert claimed is not None
     assert claimed.id == created.id
@@ -224,7 +242,9 @@ def test_real_version_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
         created = service.create_job(session)
 
     with SessionLocal() as session:
-        claimed = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+        claimed = service.claim_next_job(
+            session, worker_id="worker-a", lease_seconds=30
+        )
 
     assert claimed is not None
 
@@ -334,7 +354,9 @@ def test_reclaim_expired_job(monkeypatch: pytest.MonkeyPatch) -> None:
         created = service.create_job(session)
 
     with SessionLocal() as session:
-        claimed = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+        claimed = service.claim_next_job(
+            session, worker_id="worker-a", lease_seconds=30
+        )
 
     assert claimed is not None
     assert claimed.state is JobState.PROCESSING
@@ -372,7 +394,9 @@ def test_claim_returns_none_when_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     service = JobService()
 
     with SessionLocal() as session:
-        claimed = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+        claimed = service.claim_next_job(
+            session, worker_id="worker-a", lease_seconds=30
+        )
 
     assert claimed is None
 
@@ -397,7 +421,9 @@ def test_compute_backoff_delay_caps_at_300_seconds() -> None:
     assert compute_backoff_delay(8) == timedelta(seconds=300)
 
 
-def test_retryable_failure_requeues_pending_with_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_retryable_failure_requeues_pending_with_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     prepare_database(monkeypatch)
 
     from job_processor_service.domain.state_machine import JobState
@@ -410,7 +436,9 @@ def test_retryable_failure_requeues_pending_with_backoff(monkeypatch: pytest.Mon
         created = service.create_job(session, max_retries=3)
 
     with SessionLocal() as session:
-        claimed = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+        claimed = service.claim_next_job(
+            session, worker_id="worker-a", lease_seconds=30
+        )
 
     assert claimed is not None
 
@@ -426,7 +454,11 @@ def test_retryable_failure_requeues_pending_with_backoff(monkeypatch: pytest.Mon
     assert retried.claimed_by is None
     assert retried.lease_expires_at is None
     assert retried.version == claimed.version + 1
-    assert failed_before + timedelta(seconds=5) <= retried.next_run_at <= failed_after + timedelta(seconds=5)
+    assert (
+        failed_before + timedelta(seconds=5)
+        <= retried.next_run_at
+        <= failed_after + timedelta(seconds=5)
+    )
     assert retried.id == created.id
 
 
@@ -445,7 +477,9 @@ def test_retryable_failure_exhausted_budget_reaches_dead(
         created = service.create_job(session, max_retries=1)
 
     with SessionLocal() as session:
-        claimed = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+        claimed = service.claim_next_job(
+            session, worker_id="worker-a", lease_seconds=30
+        )
 
     assert claimed is not None
 
@@ -459,7 +493,9 @@ def test_retryable_failure_exhausted_budget_reaches_dead(
     assert dead.lease_expires_at is None
 
 
-def test_non_retryable_failure_transitions_to_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_non_retryable_failure_transitions_to_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     prepare_database(monkeypatch)
 
     from job_processor_service.domain.state_machine import JobState
@@ -472,7 +508,9 @@ def test_non_retryable_failure_transitions_to_failed(monkeypatch: pytest.MonkeyP
         created = service.create_job(session)
 
     with SessionLocal() as session:
-        claimed = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+        claimed = service.claim_next_job(
+            session, worker_id="worker-a", lease_seconds=30
+        )
 
     assert claimed is not None
 
@@ -512,7 +550,9 @@ def test_manual_retry_from_failed_preserves_retry_count_and_resets_schedule(
         created = service.create_job(session)
 
     with SessionLocal() as session:
-        claimed = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+        claimed = service.claim_next_job(
+            session, worker_id="worker-a", lease_seconds=30
+        )
 
     assert claimed is not None
 
@@ -553,7 +593,9 @@ def test_dead_cannot_be_manually_retried(monkeypatch: pytest.MonkeyPatch) -> Non
         created = service.create_job(session, max_retries=1)
 
     with SessionLocal() as session:
-        claimed = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+        claimed = service.claim_next_job(
+            session, worker_id="worker-a", lease_seconds=30
+        )
 
     assert claimed is not None
 
@@ -579,7 +621,9 @@ def test_version_conflict_on_retry(monkeypatch: pytest.MonkeyPatch) -> None:
         job = service.create_job(session)
 
     with SessionLocal() as session:
-        claimed = service.claim_next_job(session, worker_id="worker-a", lease_seconds=30)
+        claimed = service.claim_next_job(
+            session, worker_id="worker-a", lease_seconds=30
+        )
 
     assert claimed is not None
 

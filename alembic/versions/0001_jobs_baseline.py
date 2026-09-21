@@ -49,11 +49,23 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("CURRENT_TIMESTAMP"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("CURRENT_TIMESTAMP"),
+        ),
         sa.CheckConstraint("retry_count >= 0", name="ck_jobs_retry_count_non_negative"),
         sa.CheckConstraint("max_retries >= 1", name="ck_jobs_max_retries_positive"),
-        sa.CheckConstraint("char_length(job_type) > 0", name="ck_jobs_job_type_non_empty"),
+        sa.CheckConstraint(
+            "char_length(job_type) > 0", name="ck_jobs_job_type_non_empty"
+        ),
         sa.CheckConstraint(
             "(state = 'PROCESSING' AND claimed_by IS NOT NULL AND lease_expires_at IS NOT NULL) "
             "OR (state <> 'PROCESSING' AND claimed_by IS NULL AND lease_expires_at IS NULL)",

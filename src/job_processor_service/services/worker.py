@@ -34,6 +34,7 @@ class Worker:
         self.lease_seconds = lease_seconds
         self.poll_interval_seconds = poll_interval_seconds
         if work_callback is None:
+
             def _noop(job: Job) -> None:
                 return None
 

@@ -60,7 +60,9 @@ def test_alembic_upgrade_and_downgrade(monkeypatch: object) -> None:
     } <= job_columns
 
     with engine.connect() as connection:
-        revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        revision = connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
 
     assert revision == "0001_jobs_baseline"
 

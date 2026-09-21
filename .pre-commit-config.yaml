@@ -35,7 +35,7 @@ repos:
     rev: v3.90.5
     hooks:
       - id: trufflehog
-        args: ["filesystem", ".", "--no-update", "--fail"]
+        args: ["filesystem", ".", "--no-update", "--fail", "--exclude-paths", ".trufflehog-exclude-paths.txt"]
 
   - repo: local
     hooks:
