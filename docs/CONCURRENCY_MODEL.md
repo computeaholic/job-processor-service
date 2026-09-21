@@ -1,61 +1,195 @@
 CONCURRENCY MODEL — job-processor-service
 
 Scope Frozen: 2026-09-20
-Spec Version: v1.1
+Spec Version: 1.1
+
+This document defines how concurrent workers interact safely with the database and guarantees single ownership of a job during execution.
+
+Concurrency correctness is enforced via database row-level locking plus version-guarded writes.
+
+No distributed coordination mechanisms are used.
 
 1. Concurrency Strategy
 
-This repository deliberately uses two mechanisms together:
+The system relies on:
 
-- PostgreSQL row-level locking via `SELECT ... FOR UPDATE SKIP LOCKED`
-- `version`-guarded updates to reject stale writers during finalize, retry, and reclaim operations
+PostgreSQL row-level locking
 
-2. Claim Algorithm
+SELECT ... FOR UPDATE SKIP LOCKED
 
-Eligible work is defined as:
+Explicit transaction boundaries
 
-- `state = 'PENDING'`
-- `claimed_by IS NULL`
+Lease-based recovery
 
-Workers claim the oldest pending row by `created_at` under `FOR UPDATE SKIP LOCKED`, then update it to:
+Optimistic concurrency via version column
 
-- `state = 'PROCESSING'`
-- `claimed_by = worker_id`
-- `lease_expires_at = now + lease_seconds`
-- `version = version + 1`
+No distributed locks.
+No external brokers.
+
+2. Job Claim Algorithm
+
+Workers poll eligible jobs:
+
+Criteria:
+
+state = 'PENDING'
+
+next_run_at <= now
+
+claimed_by IS NULL
+
+Acquisition query:
+
+SELECT *
+FROM jobs
+WHERE state = 'PENDING'
+AND next_run_at <= now()
+AND claimed_by IS NULL
+ORDER BY next_run_at, created_at, id
+FOR UPDATE SKIP LOCKED
+LIMIT 1;
+
+Behavior:
+
+Rows locked immediately upon selection.
+
+Locked rows are invisible to competing workers.
+
+Workers skipping locked rows prevents duplicate ownership.
+
+Claim transition occurs inside:
+
+with session.begin():
+
+State mutation to PROCESSING occurs before commit.
 
 3. Ownership Guarantees
 
-- competing workers cannot claim the same pending row concurrently
-- only rows with no current owner are claimable
-- stale finalize or retry writes fail with `VERSION_CONFLICT`
+A job is considered owned when:
 
-4. Lease Recovery
+state = 'PROCESSING'
 
-If a worker dies after claim, the row stays in `PROCESSING` until `lease_expires_at` passes.
+claimed_by is set
 
-Recovery path:
+lease_expires_at is set
 
-- `PROCESSING -> PENDING`
-- clear `claimed_by`
-- clear `lease_expires_at`
-- increment `version`
-- leave `retry_count` unchanged
+Stale finalize, retry, or reclaim attempts must also satisfy the current version value.
 
-5. Duplicate Execution Boundary
+If the row version has changed, the write fails with VERSION_CONFLICT.
 
-This system is not exactly-once.
+4. Worker Crash Handling
 
-It prevents concurrent duplicate claim of a pending row, but duplicate external side effects are still possible when:
+If worker crashes after claim but before finalize:
 
-- a worker performs the effect
-- the final `SUCCEEDED` write does not commit
-- the lease later expires and another worker reprocesses the job
+Job remains in PROCESSING
 
-Handlers must therefore be idempotent.
+Lease TTL governs recovery
 
-6. Version/OCC Role
+Lease expiration condition:
 
-`version` is part of the canonical architecture.
+lease_expires_at < now
 
-It is not decorative. It protects against lost updates when a worker or operator acts on stale state after another transaction has already changed the row.
+Recovery behavior:
+
+Job requeued to PENDING
+
+Lock fields cleared
+
+next_run_at = now
+
+No retry_count increment
+
+Logged once
+
+Recovery executed by worker maintenance loop.
+
+5. Isolation Level
+
+Database isolation level:
+
+READ COMMITTED (PostgreSQL default)
+
+Justification:
+
+Row locks guarantee single-claim semantics.
+
+Version guards reject stale writers.
+
+Higher isolation unnecessary for scope.
+
+6. Duplicate Execution Safety
+
+System guarantees:
+
+No two workers claim the same eligible PENDING job concurrently.
+
+Duplicate execution may occur only after lease expiration or after external effect / commit mismatch.
+
+Handlers must be idempotent.
+
+Execution safety assumptions:
+
+Side effects must tolerate re-run.
+
+No external side effect tracking provided in v1.
+
+7. Contention Behavior
+
+Under high worker concurrency:
+
+Workers may skip locked rows.
+
+No API-level errors generated.
+
+Lock contention is internal and logged at DEBUG/INFO boundaries as needed.
+
+Throughput degrades gracefully.
+
+No spin-locking.
+No busy-wait loops.
+
+Polling interval governs load.
+
+8. Idempotent API Concurrency
+
+Duplicate job creation prevented by:
+
+Unique constraint on client_request_id
+
+DB-level enforcement
+
+409 returned on immutable create-contract mismatch
+
+No race condition possible due to constraint.
+
+9. Concurrency Boundaries
+
+Concurrency safety is guaranteed only when:
+
+All state transitions occur inside explicit transactions.
+
+All claims use FOR UPDATE SKIP LOCKED.
+
+Lease recovery follows defined TTL.
+
+All stale writes respect version guards.
+
+Violation of these rules breaks correctness and is not permitted.
+
+10. Enforcement Requirements
+
+Concurrency test must simulate ≥2 workers.
+
+Tests must verify:
+
+No double claim
+
+Proper lease recovery
+
+Correct DEAD escalation
+
+No test may mock row-level locking.
+
+Integration DB required for concurrency validation.
+
+Concurrency correctness is a first-class system guarantee.

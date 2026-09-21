@@ -1,10 +1,10 @@
-.PHONY: bootstrap check-python fmt lint typecheck test test-cov security up down down-v ps logs-db doctor-db wait-db migrate rollback verify
+.PHONY: bootstrap check-python fmt lint typecheck test test-cov security up down down-v ps logs-db doctor-db wait-db migrate rollback verify worker
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
 COMPOSE := docker compose -p job-processor-service
 DB_CONTAINER := job-processor-postgres
-DB_PORT ?= 5433
+DB_PORT ?= 5432
 
 export DATABASE_URL ?= postgresql+psycopg://postgres:postgres@localhost:$(DB_PORT)/job_processor
 export JOB_PROCESSOR_DB_PORT := $(DB_PORT)
@@ -31,6 +31,9 @@ migrate:
 
 rollback:
 	$(PYTHON) -m alembic downgrade -1
+
+worker:
+	DATABASE_URL="$(DATABASE_URL)" $(PYTHON) -m job_processor_service.worker_main
 
 test:
 	$(PYTHON) -m pytest -q

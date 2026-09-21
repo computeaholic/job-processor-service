@@ -1,80 +1,181 @@
 job-processor-service
 
-A PostgreSQL-backed background job processing service focused on durable job lifecycle management and worker coordination.
+A database-backed background job processing service designed to demonstrate deterministic state modeling, row-level concurrency control, retry escalation, and explicit transaction discipline.
 
-What it demonstrates
+This repository is intentionally constrained and specification-first.
 
-- durable job persistence in PostgreSQL
-- worker/API separation
-- contention-safe claiming with `FOR UPDATE SKIP LOCKED`
-- lease recovery for stranded in-flight jobs
-- bounded failure counting with `DEAD` terminal escalation
-- durable create replay safety with `client_request_id`
-- optimistic concurrency checks via `version`
+It exists to demonstrate senior-level backend engineering discipline.
 
-Architecture
+Purpose
 
-Client API:
+This service implements:
 
-- `POST /jobs`
-- `GET /jobs`
-- `GET /jobs/{id}`
-- `POST /jobs/{id}/retry`
-- `GET /health/live`
-- `GET /health/ready`
+Explicit job state transitions
 
-Internal worker operations:
+Deterministic failure modeling
 
-- claim next pending job
-- mark processing success
-- record processing failure
-- reclaim expired leases
+Row-level locking using FOR UPDATE SKIP LOCKED
 
-Shape:
+Retry with deterministic exponential backoff
 
-`client -> FastAPI -> JobService -> PostgreSQL`
+Escalation to DEAD terminal state
 
-`worker -> JobService -> PostgreSQL`
+Idempotent job creation via database constraint and immutable create contract
 
-Job lifecycle
+Version-guarded state updates
 
-`PENDING -> PROCESSING -> SUCCEEDED`
+Explicit transaction boundaries
 
-`PENDING -> PROCESSING -> FAILED -> PENDING`
+Clean architectural layering
 
-`PENDING -> PROCESSING -> FAILED/DEAD`
+Mechanical CI enforcement
 
-`DEAD` and `SUCCEEDED` are terminal.
+No external brokers.
+No distributed coordination claims.
+Single-database concurrency model.
 
-Failure model
+Architecture Overview
 
-- `retry_count` increments only when processing fails.
-- `POST /jobs/{id}/retry` is a manual requeue from `FAILED` back to `PENDING`.
-- `max_retries` is a failure budget. When the next processing failure would exhaust that budget, the job becomes `DEAD`.
-- Lease recovery requeues expired `PROCESSING` jobs without incrementing `retry_count`.
-- Worker execution is at-least-once. If an external side effect succeeds but the completion write does not commit, the effect may happen again on replay. Handlers must be idempotent.
+Core entity:
 
-Run
+Job
 
-```bash
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -e '.[dev]'
-make up
-make wait-db
-make migrate
-export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5433/job_processor
+Worker model:
+
+Polls eligible jobs (status = PENDING AND next_run_at <= now)
+
+Claims via row-level lock
+
+Transitions to PROCESSING
+
+Executes handler selected by job_type using payload
+
+Transitions to:
+
+SUCCEEDED
+
+PENDING (retryable failure with backoff)
+
+FAILED (non-retryable failure)
+
+DEAD
+
+All mutations occur within explicit transaction boundaries.
+
+Stack
+
+This project inherits Backend Stack Profile v1.0:
+
+Python 3.12
+
+FastAPI
+
+PostgreSQL
+
+SQLAlchemy 2.x
+
+Alembic
+
+pytest
+
+ruff / black / mypy
+
+GitHub Actions CI
+
+Docker + docker-compose
+
+Dependencies are pinned.
+No silent drift allowed.
+
+Repository Structure
+/docs
+/src
+/tests
+Makefile
+pyproject.toml
+Dockerfile
+docker-compose.yml
+
+Project specification documents live in:
+
+docs/SPEC_PACK.md
+
+docs/FAILURE_MODES.md
+
+docs/STATE_MODEL.md
+
+docs/CONCURRENCY_MODEL.md
+
+docs/CONSTRAINTS.md
+
+docs/TRADEOFFS.md
+
+docs/INTERVIEW_DEFENSE.md
+
+docs/FREEZE.md
+
+Implementation must not contradict these documents.
+
+Local Development
+
+Python 3.12 is required.
+
+From a clean clone:
+
+python3.12 --version   # must be 3.12.x
+make bootstrap
+make verify
+
+All commands must work from a clean environment.
+
+Run the API locally:
+
+export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/job_processor
 .venv/bin/uvicorn job_processor_service.main:app --app-dir src
-```
 
-Test
+Run the worker locally:
 
-```bash
-make lint
-make typecheck
-make test
-make test-cov
-make security
-```
+export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/job_processor
+make worker
+
+Local Concurrency Testing
+
+docker compose up -d
+export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/job_processor
+make verify
+
+Port 5432 collision
+
+If `localhost:5432` is already in use, another repo or local Postgres process may already be binding that port.
+
+Run:
+
+make doctor-db
+make down-v
+
+`make down-v` only tears down this repository's compose project (`job-processor-service`) and its volumes.
+
+Guarantees
+
+No implicit commits
+
+No silent failures
+
+Deterministic error envelope
+
+Explicit state transition enforcement
+
+Retry policy formally modeled
+
+Bounded retry governance with DEAD escalation
+
+Concurrency safety via database locking
+
+Worker crash recovery via lease expiry
+
+At-least-once execution with explicit idempotent-handler requirement
+
+No TODO placeholders in finished implementation
 
 Demo
 
@@ -83,7 +184,7 @@ Create a job:
 ```bash
 curl -s http://127.0.0.1:8000/jobs \
 	-H 'content-type: application/json' \
-	-d '{"client_request_id":"11111111-1111-1111-1111-111111111111","max_retries":2}'
+	-d '{"client_request_id":"11111111-1111-1111-1111-111111111111","job_type":"sample.noop","payload":{"value":"ok"},"max_retries":2}'
 ```
 
 Fetch it:
@@ -91,8 +192,6 @@ Fetch it:
 ```bash
 curl -s http://127.0.0.1:8000/jobs/<job-id>
 ```
-
-The worker lifecycle, retry path, dead escalation, reclaim behavior, and concurrency guarantees are exercised in the test suite.
 
 Status
 

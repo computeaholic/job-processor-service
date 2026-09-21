@@ -15,9 +15,9 @@ class JobState(StrEnum):
 
 TRANSITIONS: dict[JobState, set[JobState]] = {
     JobState.PENDING: {JobState.PROCESSING},
-    JobState.PROCESSING: {JobState.SUCCEEDED, JobState.FAILED, JobState.DEAD},
+    JobState.PROCESSING: {JobState.SUCCEEDED, JobState.PENDING, JobState.FAILED, JobState.DEAD},
     JobState.SUCCEEDED: set(),
-    JobState.FAILED: {JobState.PENDING, JobState.DEAD},
+    JobState.FAILED: {JobState.PENDING},
     JobState.DEAD: set(),
 }
 

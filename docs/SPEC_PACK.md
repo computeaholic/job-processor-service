@@ -1,116 +1,299 @@
 SPEC PACK — job-processor-service
-
-Scope Frozen: 2026-09-20
-Spec Version: v1.1
-
 1. Mission
+1.1 System Purpose
 
-This service demonstrates a durable background-job lifecycle implemented with FastAPI, SQLAlchemy, PostgreSQL, and an internal worker loop.
+When complete, this system provides a database-backed background job processor with deterministic state transitions, controlled retry semantics, and concurrency-safe execution using PostgreSQL row-level locking. It solves the problem of reliably executing asynchronous tasks without introducing external brokers (e.g., Redis, Kafka, Celery) while maintaining strict transaction discipline and explicit failure modeling. The primary user is a backend system or service that needs durable job processing within a single-database architecture. The invariant that must always hold true is: a job may only transition through explicitly legal states, and no eligible job may be concurrently claimed by more than one worker.
 
-The primary invariant is:
+2. Scope Definition
+2.1 In Scope
 
-- a job may only follow legal state transitions
-- no two workers may claim the same pending job concurrently
-- stale writers must fail on `version` mismatch instead of silently overwriting state
+Create job
 
-2. In Scope
+Retrieve job
 
-- create job
-- get job
-- list jobs with optional state filter
-- manual retry from `FAILED`
-- worker claim / success / failure / reclaim logic
-- lease recovery for expired `PROCESSING` jobs
-- durable create replay using optional `client_request_id`
-- Alembic-managed schema changes
-- readiness based on DB connectivity and current migration revision
+List jobs (filter by state, bounded limit)
 
-3. Out of Scope
+Manual retry from FAILED
 
-- message brokers
-- scheduled execution and `next_run_at`
-- exponential backoff scheduler
-- payload routing or typed job handlers
-- authentication / RBAC
-- exactly-once execution guarantees
-- tracing and metrics stacks
+Background worker loop
 
-4. Domain Model
+Row-level lock job acquisition
 
-Entity: `Job`
+Retry/backoff escalation
 
-Persisted fields:
+Dead terminal state
 
-- `id`: primary key
-- `client_request_id`: optional durable idempotency key, unique when present
-- `state`: one of `PENDING`, `PROCESSING`, `SUCCEEDED`, `FAILED`, `DEAD`
-- `error_message`: last processing error for failed or dead jobs
-- `claimed_by`: worker identity while processing
-- `lease_expires_at`: claim expiration timestamp while processing
-- `version`: optimistic concurrency counter
-- `retry_count`: number of processing failures recorded so far
-- `max_retries`: failure budget, minimum `1`
-- `created_at`, `updated_at`: audit timestamps
+Explicit state legality enforcement
 
-5. Public API Contract
+Deterministic error envelope
 
-- `POST /jobs`
-  Request: optional `client_request_id`, optional `max_retries >= 1`
-  Response: `201` on create, `200` on durable replay of the same request
-- `GET /jobs/{id}`
-- `GET /jobs?state=...`
-- `POST /jobs/{id}/retry`
-  Legal only from `FAILED`
-- `GET /health/live`
-- `GET /health/ready`
+Health endpoints
 
-All error responses use:
+Structured logging
 
-```json
+2.2 Out of Scope
+
+Horizontal distributed coordination across databases
+
+Message brokers (Redis/Kafka/Celery)
+
+Public scheduling features
+
+Multi-tenant authentication/RBAC
+
+UI/frontend
+
+Metrics dashboards/tracing systems
+
+Distributed tracing
+
+Cross-region failover
+
+External task orchestration
+
+AI integrations
+
+2.3 Non-Goals
+
+High-throughput event streaming
+
+Millisecond latency guarantees
+
+Exactly-once external side effects
+
+Complex job DAG orchestration
+
+Job prioritization queues
+
+Multi-queue routing systems
+
+3. Domain Model
+3.1 Entities
+Entity	Purpose	Owner	Persistence	Notes
+Job	Represents a background task and its lifecycle	System	PostgreSQL	Single authoritative entity
+
+No additional entities are defined in this version.
+
+3.2 Persisted Fields
+
+id
+
+client_request_id
+
+job_type
+
+payload
+
+state
+
+error_code
+
+error_message
+
+claimed_by
+
+lease_expires_at
+
+version
+
+retry_count
+
+max_retries
+
+next_run_at
+
+created_at
+
+updated_at
+
+3.3 Invariants
+
+Job id must be unique (DB constraint).
+
+client_request_id must be unique.
+
+job_type must be non-empty.
+
+payload must be persisted as a PostgreSQL JSONB object.
+
+A job must have exactly one valid state.
+
+Only legal state transitions are permitted.
+
+A job in PROCESSING must have claimed_by and lease_expires_at set.
+
+A job not in PROCESSING must not have claimed_by.
+
+retry_count must never exceed max_retries through silent overflow or double increment.
+
+next_run_at must always be set.
+
+Terminal states (SUCCEEDED, DEAD) cannot transition.
+
+All state transitions must occur inside explicit transaction boundaries.
+
+Only one worker may hold a row lock on an eligible PENDING job at a time.
+
+4. State Model
+4.1 States
+
+PENDING
+
+PROCESSING
+
+FAILED
+
+SUCCEEDED (terminal)
+
+DEAD (terminal)
+
+4.2 Legal Transitions
+From	To	Condition	Enforced Where
+PENDING	PROCESSING	Worker acquires row lock	Worker domain logic
+PROCESSING	SUCCEEDED	Handler success	Worker domain logic
+PROCESSING	PENDING	Retryable failure with budget remaining	Worker domain logic
+PROCESSING	FAILED	Non-retryable failure	Worker domain logic
+PROCESSING	DEAD	Retry budget exhausted	Worker domain logic
+FAILED	PENDING	Manual retry endpoint	API + domain
+4.3 Illegal Transitions
+Attempted	Expected Error	Code
+SUCCEEDED → PENDING	409	JOB_ILLEGAL_TRANSITION
+DEAD → PENDING	409	JOB_ILLEGAL_TRANSITION
+PENDING → PENDING (retry)	409	JOB_ILLEGAL_TRANSITION
+any undefined transition	409	JOB_ILLEGAL_TRANSITION
+
+All illegal transitions must be tested.
+
+5. Interface / API Contract
+5.1 Endpoints
+Method	Path	Purpose	Idempotent?
+POST	/jobs	Create job	Yes (client_request_id + immutable create contract)
+GET	/jobs/{id}	Retrieve job	Yes
+GET	/jobs?state=&limit=&offset=	Filter jobs	Yes
+POST	/jobs/{id}/retry	Retry FAILED job	No
+GET	/health/live	Liveness check	Yes
+GET	/health/ready	Readiness check	Yes
+5.2 Request Models
+
+POST /jobs
+
+job_type: string (required)
+
+payload: object (required)
+
+max_retries: int (required, >=1)
+
+client_request_id: UUID (required)
+
+Validation:
+
+job_type non-empty
+
+payload JSON serializable object
+
+max_retries >= 1
+
+5.3 Response Models
+
+Job response:
+
+id
+
+client_request_id
+
+job_type
+
+payload
+
+state
+
+error_code
+
+error_message
+
+retry_count
+
+max_retries
+
+next_run_at
+
+claimed_by
+
+lease_expires_at
+
+version
+
+created_at
+
+updated_at
+
+5.4 Error Envelope Contract
+
+All errors:
+
 {
   "error": {
     "code": "machine_identifier",
     "message": "human readable"
   }
 }
-```
 
-Relevant error codes:
+Error Codes:
 
-- `JOB_NOT_FOUND`
-- `JOB_IDEMPOTENCY_CONFLICT`
-- `JOB_ILLEGAL_TRANSITION`
-- `VERSION_CONFLICT`
+JOB_NOT_FOUND
 
-6. Internal Worker Operations
+JOB_IDEMPOTENCY_CONFLICT
 
-- claim next `PENDING` job
-- mark `PROCESSING -> SUCCEEDED`
-- record `PROCESSING -> FAILED|DEAD`
-- reclaim expired `PROCESSING` jobs back to `PENDING`
+JOB_ILLEGAL_TRANSITION
 
-These are not public API endpoints.
+JOB_PROCESSING_FAILED
 
-7. Retry Contract
+JOB_NON_RETRYABLE_FAILURE
 
-- `retry_count` increments only when processing fails.
-- manual retry does not increment or reset `retry_count`.
-- if a processing failure would make `retry_count >= max_retries`, the job becomes `DEAD` immediately.
-- `DEAD` is terminal in this sample and is not requeued by the public API.
+DB_UNAVAILABLE
 
-8. Execution Semantics
+INTERNAL_ERROR
 
-- claim concurrency safety is provided by `SELECT ... FOR UPDATE SKIP LOCKED`
-- stale write protection is provided by `version` guards on updates
-- execution is at-least-once
-- external side effects may be duplicated if they succeed before the final state write commits
+6. Failure Matrix
+Scenario	Detected At	User Response	HTTP	Log	Retry?	Idempotent?
+Invalid input	API validation	error envelope	422	WARN	No	N/A
+Missing job	API lookup	error envelope	404	INFO	No	Yes
+Duplicate client_request_id with changed immutable create field	DB/service	409	INFO	No	Yes
+Concurrency lock conflict	Worker	silent skip	N/A	DEBUG/INFO	Yes	Yes
+DB unavailable	Startup/API	error envelope	503	ERROR	Yes	Yes
+Retryable job failure	Worker	PENDING with backoff or DEAD	N/A	WARN/INFO	Yes	Yes
+Non-retryable job failure	Worker	FAILED	N/A	WARN	Manual only	Yes
+Worker crash mid-run	Recovery scan	job requeued	N/A	WARN	Yes	Yes
 
-9. Persistence Contract
+7. Transaction Model
 
-- PostgreSQL is authoritative
-- schema changes are managed by Alembic
-- job invariants are enforced by a combination of DB constraints and service-layer transition checks
-- indexes support pending polling and lease-recovery scans
+Job creation occurs within with session.begin().
+
+Worker claim occurs within explicit transaction.
+
+State finalization occurs within explicit transaction.
+
+No implicit commits allowed.
+
+Isolation: default PostgreSQL READ COMMITTED.
+
+Row acquisition uses SELECT FOR UPDATE SKIP LOCKED.
+
+Idempotency enforced via DB unique constraint on client_request_id.
+
+Version guards reject stale finalize/retry/reclaim writes.
+
+8. Concurrency Model
+
+Optimistic locking: Used.
+
+Versioning: Required.
+
+Concurrency controlled via row-level locking plus version-guarded updates.
+
+Duplicate eligible claim avoided by SKIP LOCKED.
+
+Lease TTL recovery semantics are part of the runtime model.
 
 PostgreSQL
 

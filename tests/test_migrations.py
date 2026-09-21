@@ -7,7 +7,7 @@ from alembic.config import Config
 from sqlalchemy import inspect, text
 
 DEFAULT_TEST_DATABASE_URL = (
-    "postgresql+psycopg://postgres:postgres@localhost:5433/job_processor"
+    "postgresql+psycopg://postgres:postgres@localhost:5432/job_processor"
 )
 
 
@@ -40,6 +40,24 @@ def test_alembic_upgrade_and_downgrade(monkeypatch: object) -> None:
     engine = create_engine(database_url, future=True)
     inspector = inspect(engine)
     assert "jobs" in inspector.get_table_names()
+    job_columns = {column["name"] for column in inspector.get_columns("jobs")}
+    assert {
+        "id",
+        "client_request_id",
+        "job_type",
+        "payload",
+        "state",
+        "error_code",
+        "error_message",
+        "claimed_by",
+        "lease_expires_at",
+        "version",
+        "retry_count",
+        "max_retries",
+        "next_run_at",
+        "created_at",
+        "updated_at",
+    } <= job_columns
 
     with engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
@@ -50,3 +68,8 @@ def test_alembic_upgrade_and_downgrade(monkeypatch: object) -> None:
 
     inspector = inspect(engine)
     assert "jobs" not in inspector.get_table_names()
+
+    command.upgrade(config, "head")
+
+    inspector = inspect(engine)
+    assert "jobs" in inspector.get_table_names()

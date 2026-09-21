@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
 DEFAULT_TEST_DATABASE_URL = (
-    "postgresql+psycopg://postgres:postgres@localhost:5433/job_processor"
+    "postgresql+psycopg://postgres:postgres@localhost:5432/job_processor"
 )
 
 

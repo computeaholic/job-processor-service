@@ -1,5 +1,7 @@
 from uuid import UUID
 
+from typing import Any
+
 from fastapi import APIRouter, Body, Query, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -15,14 +17,17 @@ service = JobService()
 
 
 class CreateJobRequest(BaseModel):
-    client_request_id: UUID | None = None
+    client_request_id: UUID
+    job_type: str = Field(min_length=1, max_length=100)
+    payload: dict[str, Any]
     max_retries: int = Field(default=3, ge=1)
 
 
-def job_envelope(job: Job) -> dict[str, str | int | None]:
+def job_envelope(job: Job) -> dict[str, object | None]:
     lease_expires_at = (
         job.lease_expires_at.isoformat() if job.lease_expires_at is not None else None
     )
+    next_run_at = job.next_run_at.isoformat()
     created_at = job.created_at.isoformat()
     updated_at = job.updated_at.isoformat()
     return {
@@ -30,13 +35,17 @@ def job_envelope(job: Job) -> dict[str, str | int | None]:
         "client_request_id": (
             str(job.client_request_id) if job.client_request_id is not None else None
         ),
+        "job_type": job.job_type,
+        "payload": job.payload,
         "state": job.state.value,
+        "error_code": job.error_code,
         "error_message": job.error_message,
         "version": job.version,
         "claimed_by": job.claimed_by,
         "lease_expires_at": lease_expires_at,
         "retry_count": job.retry_count,
         "max_retries": job.max_retries,
+        "next_run_at": next_run_at,
         "created_at": created_at,
         "updated_at": updated_at,
     }
@@ -69,14 +78,14 @@ def error_response(error: DomainError) -> JSONResponse:
 
 
 @router.post("")
-def create_job(
-    payload: CreateJobRequest = Body(default_factory=CreateJobRequest),
-) -> JSONResponse:
+def create_job(payload: CreateJobRequest = Body(...)) -> JSONResponse:
     with SessionLocal() as session:
         try:
             result = service.create_job(
                 session,
                 client_request_id=payload.client_request_id,
+                job_type=payload.job_type,
+                payload=payload.payload,
                 max_retries=payload.max_retries,
             )
         except DomainError as error:
@@ -87,9 +96,13 @@ def create_job(
 
 
 @router.get("")
-def list_jobs(state: JobState | None = Query(default=None)) -> JSONResponse:
+def list_jobs(
+    state: JobState | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> JSONResponse:
     with SessionLocal() as session:
-        jobs = service.list_jobs(session, state=state)
+        jobs = service.list_jobs(session, state=state, limit=limit, offset=offset)
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content=[job_envelope(job) for job in jobs],

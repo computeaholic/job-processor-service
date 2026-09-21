@@ -3,54 +3,223 @@ OPERATIONS — job-processor-service
 Scope Frozen: 2026-09-20
 Spec Version: v1.1
 
-1. Runtime Inputs
+This document defines runtime behavior, startup sequence, environment configuration, and recovery procedures.
+
+No operational behavior is implicit.
+
+1. Environment Variables
 
 Required:
 
-- `DATABASE_URL`
+Variable	Required	Description	Default
+DATABASE_URL	Yes	PostgreSQL connection string	None
+WORKER_ID	No	Worker identity override	Hostname-derived
+POLL_INTERVAL_SECONDS	No	Worker poll interval	0.5
+LEASE_TTL_SECONDS	No	Lease expiration window	30
 
-Local defaults used by the repository tooling point at `localhost:5433` to avoid collisions with other PostgreSQL samples on `5432`.
+No environment variable may change system invariants.
 
-2. Local Startup
+2. Startup Sequence
+2.1 API Startup
 
-```bash
+Load environment variables.
+
+Establish DB engine.
+
+Verify DB connectivity through readiness path.
+
+Verify migration level matches latest.
+
+Start FastAPI server.
+
+If DB unreachable:
+
+Readiness returns 503.
+
+API may start but not mark ready.
+
+2.2 Worker Startup
+
+Load environment variables.
+
+Establish DB engine.
+
+Verify DB connectivity.
+
+Start polling loop.
+
+Run claim / execute / finalize lifecycle.
+
+Worker does not require the API process to be running.
+
+Runnable command:
+
+make worker
+
+3. Worker Runtime Behavior
+3.1 Poll Loop
+
+At each interval:
+
+Begin transaction.
+
+Claim one eligible job.
+
+Transition to PROCESSING.
+
+Commit.
+
+Execution phase:
+
+Process job outside claim transaction.
+
+Finalize in separate transaction.
+
+No nested transactions permitted.
+
+3.2 Lease Recovery Loop
+
+Lease recovery is invoked through the worker-internal reclaim operation.
+
+Identify stale PROCESSING jobs.
+
+Transition stale jobs to PENDING.
+
+Clear lock fields.
+
+Set next_run_at = now.
+
+Log once per recovered job.
+
+Lease expiration condition:
+
+lease_expires_at < now
+
+4. Deployment Model
+
+Supported topology:
+
+Single Postgres node
+
+1+ API instances
+
+1+ Worker instances
+
+Concurrency safety guaranteed only within same database.
+
+No cross-database coordination supported.
+
+5. Migration Strategy
+
+All schema changes require Alembic revision.
+
+Upgrade must be applied before app start in production.
+
+Downgrade path must exist.
+
+No manual schema edits.
+
+Startup fails readiness check if migration level is behind.
+
+6. Graceful Shutdown
+
+Worker must:
+
+Stop claiming new work after shutdown requested.
+
+Allow in-flight job execution to complete.
+
+Release process cleanly.
+
+If worker terminated abruptly:
+
+Lease TTL recovery will requeue orphaned jobs.
+
+7. Logging Behavior
+
+Structured JSON only.
+
+State transitions logged at INFO.
+
+Retry scheduling logged at INFO/WARNING.
+
+Dead transitions logged at WARNING.
+
+Unexpected errors logged at ERROR/WARNING as appropriate.
+
+No payload bodies logged.
+
+No stack traces exposed via API.
+
+8. Failure Recovery Procedures
+8.1 Database Outage
+
+API readiness fails.
+
+Worker exits or loops only under explicit caller control.
+
+No state corruption occurs.
+
+Recovery:
+
+Restore DB.
+
+Restart service.
+
+8.2 Worker Crash
+
+Effect:
+
+Running jobs remain claimed.
+
+Recovery:
+
+Lease TTL requeues job.
+
+No manual intervention required.
+
+8.3 Poison Job
+
+Condition:
+
+retry_count >= max_retries on retryable processing failure
+
+Effect:
+
+Transition to DEAD.
+
+No automatic retry.
+
+Recovery:
+
+No manual retry in this version.
+
+9. Operational Assumptions
+
+Single database authority.
+
+No cross-region deployment.
+
+System clock reasonably synchronized.
+
+Environment variables correctly configured.
+
+Violation of these assumptions invalidates guarantees.
+
+10. Local Commands
+
 make up
+
 make wait-db
+
 make migrate
-export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5433/job_processor
-.venv/bin/uvicorn job_processor_service.main:app --app-dir src
-```
 
-3. Migration Operations
+make rollback
 
-- `make migrate` runs `alembic upgrade head`
-- `make rollback` runs `alembic downgrade -1`
+make worker
 
-4. Health Behavior
+11. Container Runtime
 
-- liveness returns `200` when the API process is running
-- readiness returns `200` only when PostgreSQL is reachable and the DB revision matches Alembic head
-- readiness returns `503` when the DB is unavailable or migrations are missing/outdated
+The root Dockerfile runs the API by default with a pinned Python 3.12 base image and non-root runtime user.
 
-5. Worker Operation
-
-The worker is a library-level loop, not a separate HTTP surface.
-
-Operationally it:
-
-- claims one eligible job at a time
-- executes the callback
-- records `SUCCEEDED`, `FAILED`, or `DEAD`
-- supports graceful stop through the provided `Event` in `run_forever()`
-
-6. Recovery Procedures
-
-- worker crash after claim: wait for lease expiry, then reclaim to `PENDING`
-- DB outage: readiness fails; no false ready signal is emitted
-- exhausted failure budget: job becomes `DEAD` and stays terminal
-
-7. Logging
-
-- structured JSON strings on stdout/stderr via the stdlib logger
-- no payload logging
-- worker identity included on claim, success, and failure events where relevant
+The worker can be launched by overriding the container command to run `python -m job_processor_service.worker_main`.

@@ -5,30 +5,127 @@ Spec Version: v1.1
 
 1. Design Intent
 
-This repository demonstrates a single-database job processor where lifecycle truth lives in PostgreSQL and worker coordination is enforced in the database, not in an external queue.
+This system provides a database-backed background job processor using PostgreSQL row-level locking instead of an external broker. It is responsible for durable job execution, explicit retry semantics, and deterministic state transitions. The primary invariant protected is: a job may only move through legal state transitions and may only be claimed by one worker at a time. The most important design decision is using SELECT FOR UPDATE SKIP LOCKED with explicit transaction boundaries to guarantee single ownership and eliminate duplicate concurrent claim. All failure behavior and retry escalation are explicitly modeled.
 
-2. Strongest Defensible Claims
+2. What This Project Demonstrates
 
-- single-row claim contention is controlled with `FOR UPDATE SKIP LOCKED`
-- stale writers are rejected with `version` guards
-- crashed workers do not strand jobs permanently because lease expiry enables reclaim
-- public create replay is durable when `client_request_id` is supplied
-- the public API is restricted to client-facing operations, not worker state mutation
+Explicit state transition enforcement in domain layer
 
-3. Hostile Questions and Answers
+Row-level concurrency control using FOR UPDATE SKIP LOCKED
 
-- Can two workers claim the same pending job concurrently?
-	No. The claim path locks and skips competing rows inside PostgreSQL.
-- Is execution exactly once?
-	No. It is at-least-once. External effects can duplicate if the effect succeeds but the final commit does not.
-- Why keep `version` if row locking already exists?
-	Because finalize, retry, and reclaim can race with stale state loaded in earlier sessions. `version` turns that into an explicit conflict instead of a lost update.
-- What does `DEAD` mean?
-	The job exhausted its processing-failure budget and will not re-enter the queue through the public API.
+Lease-based recovery of crashed workers
 
-4. Honest Limits
+Deterministic retry/backoff policy without jitter
 
-- no broker-backed scaling story
-- no delayed retry scheduler
-- no typed payload execution contract
-- no authentication or multi-tenancy
+Idempotent job creation via immutable create contract and database unique constraint
+
+Explicit transaction boundaries (with session.begin():)
+
+Version-guarded state updates
+
+Deterministic error envelope contract
+
+Separation of API, domain, worker, and infrastructure layers
+
+All items above correspond to implemented behavior.
+
+3. Tradeoffs Made
+Decision	Alternative	Why Rejected	Cost
+DB-native queue	Redis/Kafka/Celery	Expands scope and operational complexity	DB contention at scale
+Retain version column	Row-lock-only updates	Lost-update detection would be weaker	Slightly more bookkeeping
+Deterministic backoff	Jittered retry	Non-determinism complicates testing	Possible synchronized retries
+No external heartbeat system	Distributed lease coordination	Adds coordination layer	Duplicate execution possible after TTL expiry
+No priority queues	Multi-queue scheduler	Out of scope	No SLA-tiering
+4. Scaling Considerations (10x Scenario)
+
+First bottleneck: database contention during job polling.
+
+Next bottleneck: connection pool exhaustion.
+
+Mitigation: tune poll interval, connection pool size, and index design.
+
+Architectural change: introduce broker-backed dispatch while preserving the Job table as state authority.
+
+Stable components: domain state machine, failure matrix, retry semantics, idempotent create contract.
+
+First extraction boundary: replace DB polling with external queue while keeping Job table as lifecycle authority.
+
+5. Concurrency & Failure Analysis
+
+Race condition risk:
+
+Multiple workers attempting to claim same job.
+
+Prevented via FOR UPDATE SKIP LOCKED.
+
+Partial failure risk:
+
+Worker crash after claim.
+
+Mitigated via lease TTL recovery.
+
+Duplicate execution risk:
+
+Possible after lease expiry or after external side-effect / commit mismatch.
+
+Handlers required to be idempotent.
+
+Idempotency guarantee:
+
+Unique constraint on client_request_id plus immutable create-contract comparison prevents duplicate create.
+
+Retry safety:
+
+Retryable handler failures are automatically requeued with deterministic backoff.
+
+Non-retryable failures transition to FAILED and require deliberate manual retry.
+
+DEAD is terminal.
+
+6. Operational Readiness
+
+Startup sequence:
+
+Apply migrations.
+
+Start API.
+
+Start worker loop independently if desired.
+
+Health checks:
+
+Liveness: process active.
+
+Readiness: database reachable and migrations current.
+
+Logs:
+
+Structured JSON.
+
+State transitions logged once.
+
+Worker failures logged at finalization.
+
+Recovery from failed deployment:
+
+Rollback via Alembic downgrade.
+
+Restart workers; lease recovery requeues orphaned jobs.
+
+7. Known Limits
+
+Single-node PostgreSQL assumption.
+
+No horizontal scaling across databases.
+
+Polling-based queue.
+
+No priority scheduling.
+
+No distributed locking.
+
+No rate limiting.
+
+No authentication.
+
+Limitations are intentional.

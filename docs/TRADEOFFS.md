@@ -3,30 +3,56 @@ TRADEOFFS — job-processor-service
 Scope Frozen: 2026-09-20
 Spec Version: v1.1
 
-1. Deliberate Choices
+1. Decision Log
+Decision	Alternatives Considered	Why Rejected	Cost of This Choice	Where Enforced
+Use PostgreSQL row-level locking (FOR UPDATE SKIP LOCKED)	Redis queue, Celery, Kafka	Adds broker complexity; expands scope beyond single-DB service	Polling inefficiency under scale; DB contention	CONCURRENCY_MODEL.md
+Single Job entity only	Separate job_effects table, job_type registry	Adds additional entity complexity not required for core goal	Less extensible for external side-effect tracking	SPEC_PACK.md
+Explicit transaction boundaries (with session.begin())	Implicit session commits	Hidden side effects; unclear atomicity	Slight verbosity in code	CONSTRAINTS.md
+Deterministic backoff without jitter	Exponential backoff with jitter	Non-determinism complicates testing and interview defense	Possible synchronized retry spikes	FAILURE_MODES.md
+Lease TTL recovery model	Distributed heartbeats or fencing tokens	Adds distributed coordination complexity	Duplicate execution possible after TTL expiry	STATE_MODEL.md
+Unique constraint for idempotent job creation	In-memory dedupe, cache-based dedupe	Not durable; race-prone	Requires DB index and constraint management	FAILURE_MODES.md
+Retain optimistic concurrency version column	Row-lock-only write path	Stale finalize/retry/reclaim writes would be harder to detect	Additional version bookkeeping	CONCURRENCY_MODEL.md
+No priority queues	Multi-queue design	Out of scope; adds scheduling complexity	No fine-grained job prioritization	SPEC_PACK.md
+No authentication	API key, JWT	Internal service assumption; not core objective	Not production-exposed safe	SPEC_PACK.md
+2. Scope Exclusions (Intentional Non-Build)
+Excluded Feature	Why Not Built	Risk / Cost of Exclusion	When It Would Be Added
+External broker (Redis/Kafka)	Demonstrate DB-native queue	DB load increases with scale	At sustained high throughput
+Distributed coordination	Single DB design	Not horizontally scalable across regions	Multi-region deployment requirement
+Metrics/Tracing stack	Avoid observability framework creep	Reduced production visibility	Production deployment
+Auth/RBAC	Internal service assumption	Not safe for public exposure	External API exposure
+Priority scheduling	Not required for lifecycle modeling	FIFO/backoff only	SLA-tiered job processing
+3. Complexity Avoidance
 
-- PostgreSQL claim coordination with `FOR UPDATE SKIP LOCKED` instead of a broker
-	Cost: polling overhead and DB contention under load
-- retained `version` checks in addition to row locking
-	Benefit: stale finalize/retry/reclaim writes fail loudly instead of silently winning
-- optional `client_request_id` for durable create replay
-	Benefit: public create semantics are stronger without expanding the domain model
-- manual retry only
-	Cost: no scheduler, no delayed backoff queue, no `next_run_at`
-- `DEAD` is terminal
-	Benefit: the final failure boundary is explicit and easy to defend
+No external queue — avoids broker operations, network partitions, delivery semantics.
 
-2. Explicit Non-Builds
+No distributed locks — avoids coordination complexity.
 
-- no external broker
-- no delayed scheduling
-- no priority queues
-- no authentication
-- no exactly-once side-effect protocol
-- no metrics or tracing framework
+No caching layer — avoids invalidation logic; correctness prioritized.
 
-3. Scale Notes
+No DAG orchestration — single-step job lifecycle only.
 
-The first bottleneck remains database contention during polling and claim.
+No multi-entity model — maintain minimal invariant surface.
 
-The first extraction boundary would be claim transport, not the state model: move dispatch to a broker while preserving the `jobs` table as lifecycle authority.
+4. 10x Scale Notes
+
+Bottleneck: Database contention during high worker concurrency.
+
+Mitigation: Increase poll interval, tune indexes, and control worker count.
+
+First extraction boundary: Replace polling transport with broker-backed dispatch while preserving the Job state model.
+
+No claims of automatic horizontal scale.
+
+5. Freeze Rule
+
+Any change to a major decision requires:
+
+Update SPEC_PACK.md
+
+Update this TRADEOFFS.md
+
+Update FREEZE.md
+
+Record new commit hash
+
+Tradeoffs are binding.

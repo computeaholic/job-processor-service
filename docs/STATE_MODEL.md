@@ -1,82 +1,169 @@
 STATE MODEL — job-processor-service
 
 Scope Frozen: 2026-09-20
-Spec Version: v1.1
+Spec Version: 1.1
+
+This document defines the authoritative lifecycle for the Job entity.
+
+No implicit transitions permitted.
+All transitions must be explicitly modeled and tested.
 
 1. States
 
-- `PENDING`
-- `PROCESSING`
-- `FAILED`
-- `SUCCEEDED` (terminal)
-- `DEAD` (terminal)
+Valid States:
+
+PENDING
+
+PROCESSING
+
+FAILED
+
+SUCCEEDED (terminal)
+
+DEAD (terminal)
+
+Terminal States:
+
+SUCCEEDED
+
+DEAD
+
+Terminal states may not transition except via explicitly defined rules.
 
 2. State Definitions
+PENDING
 
-`PENDING`
+Job is eligible for execution when:
 
-- eligible to be claimed
-- `claimed_by` and `lease_expires_at` must both be `NULL`
+next_run_at <= now
 
-`PROCESSING`
+No worker currently owns the job.
 
-- owned by exactly one worker
-- `claimed_by` and `lease_expires_at` must both be non-`NULL`
+claimed_by must be NULL.
 
-`FAILED`
+lease_expires_at must be NULL.
 
-- last processing attempt failed
-- `retry_count` has already been incremented
-- may be manually retried back to `PENDING`
+PROCESSING
 
-`SUCCEEDED`
+Job is actively being processed by a worker.
 
-- processing completed successfully
-- terminal
+claimed_by must be set.
 
-`DEAD`
+lease_expires_at must be set.
 
-- processing failure budget exhausted
-- terminal in this sample
+Worker must hold row-level lock at claim time.
+
+FAILED
+
+Job execution failed in a non-retryable or operator-intervention path.
+
+retry_count has already been incremented.
+
+May transition back to PENDING only through manual retry.
+
+SUCCEEDED (terminal)
+
+Job successfully executed.
+
+No further transitions allowed.
+
+DEAD (terminal)
+
+Job exceeded max retries through retryable processing failure.
+
+No manual retry is allowed in this version.
 
 3. Legal Transitions
-
-- `PENDING -> PROCESSING` via worker claim
-- `PROCESSING -> SUCCEEDED` on successful handler completion
-- `PROCESSING -> FAILED` on failed processing while retries remain
-- `PROCESSING -> DEAD` on failed processing when `retry_count` reaches `max_retries`
-- `FAILED -> PENDING` via manual retry endpoint
-
+From	To	Condition	Enforced In
+PENDING	PROCESSING	Worker acquires job via FOR UPDATE SKIP LOCKED	Worker
+PROCESSING	SUCCEEDED	Handler returns success	Worker
+PROCESSING	PENDING	Retryable failure and retry_count < max_retries	Worker
+PROCESSING	FAILED	Handler raises NonRetryableJobError	Worker
+PROCESSING	DEAD	Retryable failure and retry_count >= max_retries	Worker
+FAILED	PENDING	Manual retry endpoint invoked	API + Domain
 4. Illegal Transitions
 
-Any transition not listed above is illegal.
+The following transitions are explicitly illegal:
 
-Examples:
+Attempted	Behavior	Error Code
+SUCCEEDED → any state	Reject	JOB_ILLEGAL_TRANSITION
+PENDING → SUCCEEDED (external)	Reject	JOB_ILLEGAL_TRANSITION
+PENDING → PENDING (retry)	Reject	JOB_ILLEGAL_TRANSITION
+DEAD → PENDING	Reject	JOB_ILLEGAL_TRANSITION
+any undefined transition	Reject	JOB_ILLEGAL_TRANSITION
 
-- `PENDING -> SUCCEEDED`
-- `PENDING -> PENDING` via retry
-- `SUCCEEDED -> PROCESSING`
-- `DEAD -> PENDING`
+Illegal transitions:
 
-Illegal transitions raise `JOB_ILLEGAL_TRANSITION` and do not mutate state.
+Return HTTP 409 (if API initiated)
 
-5. Retry Counting Semantics
+Log once at WARNING level
 
-- `retry_count` starts at `0`
-- increment happens only when processing fails
-- manual retry preserves the current `retry_count`
-- `max_retries` is a failure budget, not a count of retry requests
+Do not mutate state
 
-6. Lease and Recovery
+All illegal transitions must be tested.
 
-- a claim sets `claimed_by` and `lease_expires_at`
-- if `lease_expires_at < now`, the job may be reclaimed
-- reclaim moves `PROCESSING -> PENDING`
-- reclaim clears claim fields
-- reclaim does not increment `retry_count`
+5. Attempt Counting Semantics
 
-7. Terminal-State Rules
+retry_count starts at 0.
 
-- `SUCCEEDED` never leaves terminal state
-- `DEAD` never leaves terminal state in this repository
-- terminal jobs are visible through `GET` and `LIST` only
+Increment occurs after processing failure.
+
+Automatic retry allowed when:
+
+retry_count < max_retries
+
+When:
+
+retry_count >= max_retries
+
+Transition to DEAD.
+
+Manual retry preserves retry_count.
+
+No off-by-one ambiguity permitted.
+
+6. Lease & Recovery Rules
+
+Lease TTL: configurable (default 30 seconds in local entrypoint settings)
+
+A job in PROCESSING is considered stale when:
+
+lease_expires_at < now
+
+Recovery behavior:
+
+Stale job transitions to PENDING
+
+claimed_by cleared
+
+lease_expires_at cleared
+
+next_run_at = now
+
+retry_count unchanged
+
+Recovery is worker responsibility.
+
+7. Invariant Guarantees
+
+A job may only exist in one state.
+
+A job may only be in PROCESSING when owned by exactly one worker.
+
+A job in SUCCEEDED or DEAD must never be auto-retried.
+
+State transitions must occur inside explicit transaction boundaries.
+
+No state mutation may occur outside transaction.
+
+8. Enforcement Requirements
+
+All state transitions must pass through domain logic.
+
+Worker must never mutate state directly without domain validation.
+
+API retry endpoint must validate legal source state.
+
+Tests must derive from this document.
+
+State discipline is core system integrity.
