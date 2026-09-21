@@ -114,7 +114,7 @@ Optional:
 - pytest-asyncio (only if async used)
 
 Coverage target:
-80–85%
+90%
 
 Rules:
 - Unit tests for domain logic

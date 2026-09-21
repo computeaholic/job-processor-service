@@ -1,7 +1,7 @@
 CONSTRAINTS — job-processor-service
 
-Scope Frozen: 2026-02-27
-Spec Version: 1.0
+Scope Frozen: 2026-09-20
+Spec Version: v1.1
 
 This document defines non-negotiable constraints for this repository.
 
@@ -167,7 +167,7 @@ Documentation must reflect implemented behavior only.
 
 7. Scope Discipline
 
-Scope frozen as of 2026-02-27.
+Scope frozen as of 2026-09-20.
 
 No feature expansion without SPEC_PACK revision.
 

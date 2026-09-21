@@ -1,7 +1,7 @@
 GITHUB WORKFLOW — job-processor-service
 
-Scope Frozen: 2026-02-27
-Spec Version: v1.0
+Scope Frozen: 2026-09-20
+Spec Version: v1.1
 
 This document defines repository workflow discipline.
 
@@ -109,7 +109,7 @@ mypy type checking
 
 pytest test execution
 
-Coverage threshold (80–85%)
+Coverage threshold (90%)
 
 CI must fail on:
 

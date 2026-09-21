@@ -3,77 +3,75 @@ PROJECT INITIALIZATION CHECKLIST — job-processor-service
 Scope Frozen: 2026-09-20
 Spec Version: v1.1
 
-No /src directory may exist until all required items are complete.
+Completed initialization checklist for the released repository.
 
 1. Specification
 
- SPEC_PACK.md completed in full
+	SPEC_PACK.md completed in full
 
- Mission clearly defined
+	Mission clearly defined
 
- Domain entities defined
+	Domain entities defined
 
- Invariants defined
+	Invariants defined
 
- State model defined
+	State model defined
 
- Illegal transitions defined
+	Illegal transitions defined
 
- Failure matrix completed
+	Failure matrix completed
 
- Concurrency model defined
+	Concurrency model defined
 
- Security considerations documented
+	Security considerations documented
 
- Operational considerations documented
+	Operational considerations documented
 
 2. Scope & Constraints
 
- Scope frozen (date stamped in SPEC_PACK.md)
+	Scope frozen (date stamped in SPEC_PACK.md)
 
- Out-of-scope items explicitly listed
+	Out-of-scope items explicitly listed
 
- Complexity budget declared
+	Complexity budget declared
 
- BACKEND_STACK_PROFILE adopted
+	BACKEND_STACK_PROFILE adopted
 
- Constraints frozen in CONSTRAINTS.md
+	Constraints frozen in CONSTRAINTS.md
 
- Dependency direction rules acknowledged
+	Dependency direction rules acknowledged
 
- Error envelope contract confirmed
+	Error envelope contract confirmed
 
- Pending before implementation:
+	Makefile targets declared
 
- Makefile targets declared
-
- CI pipeline defined
+	CI pipeline defined
 
 3. Testing Strategy
 
- Unit testing boundaries defined
+	Unit testing boundaries defined
 
- Integration testing boundaries defined
+	Integration testing boundaries defined
 
- Concurrency testing plan defined
+	Concurrency testing plan defined
 
- Coverage target declared (90%)
+	Coverage target declared (90%)
 
- Test cases derived from failure matrix
+	Test cases derived from failure matrix
 
 4. Definition of Done
 
- Completion criteria explicitly listed
+	Completion criteria explicitly listed
 
- No placeholder sections remain
+	No placeholder sections remain
 
- No ambiguous design areas remain
+	No ambiguous design areas remain
 
- Interview Defense expectations defined
+	Interview Defense expectations defined
 
 Enforcement Rule
 
-Implementation may begin only when:
+Initialization was complete when:
 
 All specification and constraint items are checked.
 
