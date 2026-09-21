@@ -3,7 +3,7 @@ SPECIFICATION FREEZE — job-processor-service
 Repository: job-processor-service
 Specification Version: v1.1
 Freeze Date: 2026-09-20
-Implementation Basis Commit: 378f3a4c5187bb56270cdf3de3094b433fa6c506
+Implementation Basis Commit: 864b8204000ea406e4fe7e1980fca69560cbf825
 Baseline Commit: fea0779ab1e383147718ba5e0cf1ead90a3c4545
 Reconciliation Branch: portfolio/reconcile-job-processor
 
@@ -11,7 +11,7 @@ This freeze supersedes the earlier v1.0 specification set.
 
 This document records the formal freeze of the reconciled system definition.
 
-The referenced Implementation Basis Commit is the runtime, tooling, test, and documentation reconciliation commit immediately preceding this freeze update.
+The referenced Implementation Basis Commit is the final reconciled implementation, tests, migrations, tooling, and documentation basis immediately preceding this freeze refresh commit.
 
 Frozen authoritative artifacts:
 
